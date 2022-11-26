@@ -49,11 +49,13 @@ class ABBRobotRWSImpl:
         self._subscription = None
         self._last_error = None
         self._robot_client = None
+        self._user_robot_client = rws.RWS(robot_url, robot_username, robot_password)
         self._robot_mp_client = None
 
         self.controller_opmode: int = 0
         self.controller_state: int = 0
         self.exec_state: bool = False
+        self.exec_error: bool = False
         self.motion_program_state = MotionProgramState.idle
 
         self._motion_programs_req = []
@@ -72,6 +74,9 @@ class ABBRobotRWSImpl:
         self.exec_queued_cmd_num = -1
         self.exec_egm_active = -1
 
+        self.egm_communication_failure = False
+        self._last_egm_reset = 0
+
     def _run(self):
         while True:
             
@@ -79,13 +84,16 @@ class ABBRobotRWSImpl:
                 self._do_connect()
             
             if self.connection_status == ConnectionStatus.connected:
+                self._do_egm_start()
+
                 self._do_motion_program()
 
-                if time.perf_counter() - self._last_contact > 1:
-                    self._do_rws_check()
+                #if time.perf_counter() - self._last_contact > 1:
+                self._do_rws_check()
+
             
             wait_timeout = 0.1
-            if self.connection_status == ConnectionStatus.connected:
+            if self.connection_status == ConnectionStatus.connected and not self.egm_communication_failure:
                 wait_timeout = 1
 
             with self._thread_cv:
@@ -95,6 +103,8 @@ class ABBRobotRWSImpl:
                 else:
                     self._thread_cv.wait(timeout=wait_timeout)
                     if not self._keep_going: break
+
+        self._do_thread_fini()
 
     def _do_connect(self):
         try:                
@@ -130,7 +140,9 @@ class ABBRobotRWSImpl:
             rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
                 "motion_program_seqno"),
             rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
-                "motion_program_executing")
+                "motion_program_executing"),
+            rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
+                "motion_program_error")
             ], self._subscription_handler)
             self._subscription = sub
             self._update_state()
@@ -187,6 +199,8 @@ class ABBRobotRWSImpl:
                                 res = self._robot_mp_client.read_motion_program_result_log(self._current_motion_program_log_seqnum)
                             else:
                                 res = None
+                                if float(self._robot_client.get_digital_io("motion_program_error")) > 0.:
+                                    raise Exception("ABB motion execution failed")
                             self._current_motion_program_req = None
                             self.motion_program_state = MotionProgramState.idle
                             self._call_mp_handler(cur_req.handler, cur_req,
@@ -215,6 +229,12 @@ class ABBRobotRWSImpl:
                         if len(self._motion_programs_req) > 0:
                             next_mp_req : _mp_request = self._motion_programs_req.pop(0)
                             self._mp_stop_req = set(filter(lambda x: x>=next_mp_req.seqno, self._mp_stop_req))
+                            if next_mp_req.seqno in self._mp_stop_req:
+                                self._mp_stop_req.remove(next_mp_req.seqno)
+                                self._call_mp_handler(next_mp_req.handler, next_mp_req, MotionProgramState.error, \
+                                    Exception("Motion program cancelled"))
+                                self._wake()
+                                return
                             try:
                                 assert not self.exec_state
                                 self._current_motion_program_req = next_mp_req
@@ -247,7 +267,7 @@ class ABBRobotRWSImpl:
         self.controller_state = self._convert_controller_state(self._robot_client.get_controller_state())
         self.controller_opmode = self._convert_opmode(self._robot_client.get_operation_mode())
         self.exec_state = self._convert_execstate(self._robot_client.get_execution_state().ctrlexecstate)
-        self.exec_motion_program_seqno = int(self._robot_client.get_analog_io("motion_program_seqno"))
+        self.exec_error = int(self._robot_client.get_digital_io("motion_program_error")) > 0
         self.exec_current_cmd_num = int(self._robot_client.get_analog_io("motion_program_current_cmd_num"))
         self.exec_queued_cmd_num = int(self._robot_client.get_analog_io("motion_program_queued_cmd_num"))
         self.exec_egm_active = int(self._robot_client.get_analog_io("motion_program_egm_active"))
@@ -264,6 +284,24 @@ class ABBRobotRWSImpl:
             traceback.print_exc()
         self._last_error = err
         self.connection_status = ConnectionStatus.error
+
+    def _do_egm_start(self):
+        if self.egm_communication_failure and self._current_motion_program_req is None \
+            and len(self._motion_programs_req) == 0 and not self.exec_state:
+            now = time.perf_counter()
+            if (now - self._last_egm_reset) > 1:                
+                self._last_egm_reset = time.perf_counter()
+                req = self._get_start_egm_streaming_req()
+                self._motion_programs_req.append(req)
+
+
+    def _do_thread_fini(self):
+        with suppress(Exception):
+            if self._robot_client.get_execution_state().ctrlexecstate == "running":
+                self._robot_client.stop()
+
+        with suppress(Exception):
+            self._robot_client.logout()
 
     def start(self):
         self._keep_going = True
@@ -283,6 +321,12 @@ class ABBRobotRWSImpl:
         except:
             traceback.print_exc()
         self._subscription = None
+
+        with suppress(Exception):
+            self._user_robot_client.logout()
+
+        with suppress(Exception):
+            self._thread.join(timeout = 5)
 
     def _convert_opmode(self, abb_opmode):
         if abb_opmode == "MANR":
@@ -332,9 +376,11 @@ class ABBRobotRWSImpl:
                     self.exec_queued_cmd_num = int(float(data.lvalue))
                 elif data.name == "motion_program_egm_active":
                     self.exec_egm_active = float(data.lvalue) > 0.
+                elif data.name == "motion_program_error":
+                    self.exec_error = float(data.lvalue) > 0.
 
 
-    def start_joint_control(self, enable_motion_logging = True):
+    def start_joint_control(self, handler, enable_motion_logging = True):
         
         mm = abb_exec.egm_minmax(-1e-3,1e-3)
 
@@ -347,9 +393,8 @@ class ABBRobotRWSImpl:
         mp.EGMRunJoint(1e9, 0.005, 0.005)
 
         with self._thread_cv:
-            return self._execute_motion_program_nolock(mp, None, MotionProgramState.running_egm_joint_control, enable_motion_logging)
-            
-        
+            return self._execute_motion_program_nolock(mp, handler, MotionProgramState.running_egm_joint_control, enable_motion_logging)
+
     def execute_motion_program(self, motion_program, handler, running_state = None, enable_motion_logging = True):
         if (len(motion_program._commands) == 0):
             motion_program.WaitTime(1e-3)
@@ -390,12 +435,33 @@ class ABBRobotRWSImpl:
         except:
             traceback.print_exc()
 
+    def _get_start_egm_streaming_req(self):
+        mp = abb_exec.MotionProgram()
+        mp.WaitTime(0.001)
+
+        self._mp_seqno_i += 1
+        req = _mp_request(self._mp_seqno_i, mp, None, MotionProgramState.running, False, False)
+        return req
+
     def _wake(self):
         self._thread_cv_wake = False
         self._thread_cv.notify()
 
     def is_motion_program_running(self, motion_program_req):
+        r = self._current_motion_program_req
+        if r is None:
+            return False
         return self.motion_program_state == motion_program_req.running_state \
-            and self._current_motion_program_req.seqno == motion_program_req.seqno
+            and r.seqno == motion_program_req.seqno
 
+    def send_enable(self):
+        if not self.exec_state:
+            self._user_robot_client.set_controller_state("motoron")
+
+    def send_disable(self):
+        self._user_robot_client.set_controller_state("motoroff")
+
+    def reset_errors(self):
+        if not self.exec_state:
+            self._user_robot_client.resetpp()
     

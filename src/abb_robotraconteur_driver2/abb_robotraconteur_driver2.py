@@ -16,6 +16,9 @@ import abb_motion_program_exec as abb
 from robotraconteur_abstract_robot import AbstractRobot
 import traceback
 import time
+from . import _rws as rws
+from ._joint_control_req import JointControlReq
+from contextlib import suppress
 
 class ABBRobotImpl(AbstractRobot):
     def __init__(self, robot_info, robot_url):
@@ -25,23 +28,37 @@ class ABBRobotImpl(AbstractRobot):
         self._has_position_command = True
         self._has_velocity_command = False
         self._update_period = 4e-3
+        self._base_set_controller_state = False
+        self._base_set_operational_mode = False
         self.robot_info.robot_capabilities &= self._robot_capabilities["jog_command"] \
-             & self._robot_capabilities["position_command"] & self._robot_capabilities["trajectory_command"]
+             & self._robot_capabilities["position_command"] & self._robot_capabilities["trajectory_command"] \
+             & self._robot_capabilities["software_enable"] & self._robot_capabilities["software_reset_errors"]
         self._trajectory_error_tol = 1000
         self._egm_client = None
+        self._missed_egm = 10000
+        self._rws = rws.ABBRobotRWSImpl(self._robot_url)
+        self._joint_control_req = None
 
     def _start_robot(self):
         self._egm = EGM()
+        self._rws.start()
+        self._missed_egm = 10000
         super()._start_robot()
+        time.sleep(0.5)
 
     def _send_disable(self, handler):
-        raise NotImplementedError()
+        self._rws.send_disable()
+        self._node.PostToThreadPool(lambda: handler(None))
 
     def _send_enable(self, handler):
-        raise NotImplementedError()
+        self._rws.send_enable()
+        self._node.PostToThreadPool(lambda: handler(None))
 
     def _send_reset_errors(self, handler):
-        raise NotImplementedError()
+        self._rws.reset_errors()
+        if self._error:
+            self._joint_control_req = None
+        self._node.PostToThreadPool(lambda: handler(None))
 
     def _send_robot_command(self, now, joint_pos_cmd, joint_vel_cmd):
         if joint_pos_cmd is not None:
@@ -54,16 +71,45 @@ class ABBRobotImpl(AbstractRobot):
         robot_state = None
         while res:
             res, robot_state1 = self._egm.receive_from_robot()
-            if res:
+            if res:                
                 robot_state = robot_state1
+                self._missed_egm = 0
+        if robot_state is None:
+            self._missed_egm += 1
+        joint_ctrl_required = False
+        joint_ctrl_ready = False
+        joint_ctrl_error = False
+        if self._command_mode in (0,1,2,3):
+            joint_ctrl_required = True
+        else:
+            with suppress(Exception):
+                jc = self._joint_control_req                    
+                self._joint_control_req = None
+                jc.stop()
+        if joint_ctrl_required:
+            if self._joint_control_req is None:
+                if not self._rws.exec_state and not self._rws.exec_error:
+                    self._joint_control_req = JointControlReq(self._rws)
+                    self._joint_control_req.start()
+            if self._joint_control_req is not None:
+                joint_ctrl_error = self._joint_control_req.error
+                joint_ctrl_ready = self._joint_control_req.ready
+
+                if joint_ctrl_error:
+                    with suppress(Exception):
+                        jc = self._joint_control_req                    
+                        self._joint_control_req = None
+                        jc.stop()
+
         if robot_state is not None:
             egm_last_recv = self._stopwatch_ellapsed_s()
-            self._operational_mode = self._robot_operational_mode["auto"]
             self._last_joint_state = egm_last_recv
             self._last_endpoint_state = egm_last_recv
             self._last_robot_state = egm_last_recv
             self._enabled = robot_state.motors_on
             self._ready = robot_state.rapid_running
+            if joint_ctrl_required:
+                self._ready &= joint_ctrl_ready
         
             self._joint_position = np.deg2rad(robot_state.joint_angles)            
             self._endpoint_pose = self._node.ArrayToNamedArray(\
@@ -73,6 +119,22 @@ class ABBRobotImpl(AbstractRobot):
             if self._communication_failure:
                 self._joint_position = np.zeros((0,))        
                 self._endpoint_pose = np.zeros((0,),dtype=self._pose_dtype)
+
+        if self._rws.connection_status == rws.ConnectionStatus.connected:
+            self._controller_state = self._rws.controller_state
+            self._stopped = self._controller_state == self._robot_controller_state["emergency_stop"]
+            self._operational_mode = self._rws.controller_opmode
+            self._error = self._rws.exec_error or self._stopped  # or joint_ctrl_error
+        else:
+            self._controller_state = self._robot_controller_state["undefined"]
+            self._operational_mode = self._robot_operational_mode["undefined"]
+            self._stopped = False
+            self._error = joint_ctrl_error
+
+        self._rws.egm_communication_failure = self._missed_egm > 500
+
+        if self._error:
+            self._ready = False
 
         super()._run_timestep(now)
 
@@ -86,6 +148,13 @@ class ABBRobotImpl(AbstractRobot):
             else:
                 self._egm.send_to_robot(np.rad2deg(self._position_command))
 
+    def _verify_communication(self, now):
+        res = super()._verify_communication(now)
+        if self._rws.connection_status != rws.ConnectionStatus.connected:
+            self._communication_failure = True
+            res = False
+        return res
+
     def _close(self):
         if self._egm_client is not None:
             self.egm_client.close()
@@ -94,7 +163,7 @@ class ABBRobotImpl(AbstractRobot):
 def main():
     parser = argparse.ArgumentParser(description="ABB robot driver service for Robot Raconteur")
     parser.add_argument("--robot-info-file", type=argparse.FileType('r'),default=None,required=True,help="Robot info file (required)")
-    parser.add_argument("--robot-url", type=str,default=None,help="Robot Web Services URL")
+    parser.add_argument("--robot-url", type=str,default="http://127.0.0.1:80",help="Robot Web Services URL")
     parser.add_argument("--robot-name", type=str,default=None,help="Optional device name override")
     parser.add_argument("--wait-signal",action='store_const',const=True,default=False, help="wait for SIGTERM orSIGINT (Linux only)")
 
