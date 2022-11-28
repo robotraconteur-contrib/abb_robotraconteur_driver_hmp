@@ -10,6 +10,7 @@ from RobotRaconteurCompanion.Util.InfoFileLoader import InfoFileLoader
 from RobotRaconteurCompanion.Util.DateTimeUtil import DateTimeUtil
 from RobotRaconteurCompanion.Util.SensorDataUtil import SensorDataUtil
 from RobotRaconteurCompanion.Util.AttributesUtil import AttributesUtil
+from RobotRaconteurCompanion.Util.RobDef import register_service_types_from_resources
 from abb_robot_client.egm import EGM
 from abb_robot_client.rws import RWS
 import abb_motion_program_exec as abb
@@ -19,6 +20,7 @@ import time
 from . import _rws as rws
 from ._joint_control_req import JointControlReq
 from contextlib import suppress
+from ._motion_program import MotionExecImpl
 
 class ABBRobotImpl(AbstractRobot):
     def __init__(self, robot_info, robot_url):
@@ -38,6 +40,7 @@ class ABBRobotImpl(AbstractRobot):
         self._missed_egm = 10000
         self._rws = rws.ABBRobotRWSImpl(self._robot_url)
         self._joint_control_req = None
+        self._motion_exec_impl = MotionExecImpl(self)
 
     def _start_robot(self):
         self._egm = EGM()
@@ -58,6 +61,8 @@ class ABBRobotImpl(AbstractRobot):
         self._rws.reset_errors()
         if self._error:
             self._joint_control_req = None
+        with suppress(Exception):
+            self.command_mode = 0
         self._node.PostToThreadPool(lambda: handler(None))
 
     def _send_robot_command(self, now, joint_pos_cmd, joint_vel_cmd):
@@ -83,9 +88,10 @@ class ABBRobotImpl(AbstractRobot):
             joint_ctrl_required = True
         else:
             with suppress(Exception):
-                jc = self._joint_control_req                    
-                self._joint_control_req = None
-                jc.stop()
+                jc = self._joint_control_req
+                if jc is not None:
+                    self._joint_control_req = None
+                    jc.stop()
         if joint_ctrl_required:
             if self._joint_control_req is None:
                 if not self._rws.exec_state and not self._rws.exec_error:
@@ -142,13 +148,18 @@ class ABBRobotImpl(AbstractRobot):
              self._command_mode == self._robot_command_mode["invalid_state"]:
              self._position_command = None
 
-        if self._egm.egm_addr is not None:
+        if self._egm.egm_addr is not None and self._command_mode != 6:
             if self._position_command is None:
                 self._egm.send_to_robot(None)
             else:
                 self._egm.send_to_robot(np.rad2deg(self._position_command))
 
     def _verify_communication(self, now):
+        if self._command_mode == 6:
+            if self._rws.connection_status == rws.ConnectionStatus.connected:
+                self._communication_failure = False
+                return True
+
         res = super()._verify_communication(now)
         if self._rws.connection_status != rws.ConnectionStatus.connected:
             self._communication_failure = True
@@ -159,6 +170,36 @@ class ABBRobotImpl(AbstractRobot):
         if self._egm_client is not None:
             self.egm_client.close()
         return super()._close()
+
+    def execute_motion_program(self, program, queue):
+        assert not queue, "Queuing motion programs not supported"
+        assert self._command_mode == 6, "Invalid mode for motion program"
+
+        return self._motion_exec_impl.execute_motion_program(program)
+
+
+    # Overrides for hybrid control
+    @AbstractRobot.command_mode.setter
+    def command_mode(self, value):
+        with self._lock:
+            if self._command_mode == self._robot_command_mode["halt"] and value == 6 and not self._error and \
+                self._rws.connection_status == rws.ConnectionStatus.connected:
+
+                self._command_mode = 6
+                if self._joint_control_req is not None:
+                    self._joint_control_req.stop_join()
+                return
+            if self._command_mode == 6 and value == self._robot_command_mode["halt"]:
+                self._command_mode = self._robot_command_mode["halt"]
+                return
+        AbstractRobot.command_mode.fset(self, value)
+
+    def _verify_robot_state(self, now):
+        if self._command_mode == 6 and self._enabled and not self._error and \
+            self._rws.connection_status == rws.ConnectionStatus.connected:
+            return True
+
+        return super()._verify_robot_state(now)
 
 def main():
     parser = argparse.ArgumentParser(description="ABB robot driver service for Robot Raconteur")
@@ -172,6 +213,8 @@ def main():
     rr_args = ["--robotraconteur-jumbo-message=true"] + sys.argv
 
     RRC.RegisterStdRobDefServiceTypes(RRN)
+    register_service_types_from_resources(RRN, __package__, ["experimental.robotics.motion_program", 
+        "experimental.abb_robot", "experimental.abb_robot.motion_program"])
 
     with args.robot_info_file:
         robot_info_text = args.robot_info_file.read()
@@ -186,9 +229,9 @@ def main():
     try:
 
         robot._start_robot()
-        with RR.ServerNodeSetup("com.robotraconteur.robotics.robot.abb",59925,argv=rr_args):
+        with RR.ServerNodeSetup("experimental.abb_robot.robot",59925,argv=rr_args):
 
-            service_ctx = RRN.RegisterService("robot","com.robotraconteur.robotics.robot.Robot",robot)
+            service_ctx = RRN.RegisterService("robot","experimental.abb_robot.ABBRobot",robot)
             service_ctx.SetServiceAttributes(robot_attributes)
 
             if args.wait_signal:  
@@ -202,5 +245,6 @@ def main():
                     input("Server started, press enter to quit...")
                 else:
                     raw_input("Server started, press enter to quit...")
-    finally:
+            robot._close()
+    except:
         robot._close()

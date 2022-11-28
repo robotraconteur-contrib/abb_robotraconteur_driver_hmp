@@ -77,6 +77,8 @@ class ABBRobotRWSImpl:
         self.egm_communication_failure = False
         self._last_egm_reset = 0
 
+        self._stop_all = False
+
     def _run(self):
         while True:
             
@@ -177,6 +179,10 @@ class ABBRobotRWSImpl:
                                 if self._current_motion_program_req.seqno in self._mp_stop_req:
                                     self._mp_stop_req.remove(self._current_motion_program_req.seqno)
                                     self.motion_program_state = MotionProgramState.stop_requested
+
+                                self._call_mp_handler(self._current_motion_program_req.handler, 
+                                        self._current_motion_program_req, self.motion_program_state,
+                                        (self.exec_current_cmd_num, self.exec_queued_cmd_num))
 
                             if self.motion_program_state == MotionProgramState.stop_requested:
                                 self._current_motion_program_stop_time = time.perf_counter()
@@ -413,6 +419,9 @@ class ABBRobotRWSImpl:
     def stop_motion_program(self, motion_program_req):
         with self._thread_cv:
             self._mp_stop_req.add(motion_program_req.seqno)
+    
+    def stop_motion_program_nolock(self, motion_program_req):
+        self._mp_stop_req.add(motion_program_req.seqno)
     
     def _execute_motion_program_nolock(self, motion_program, handler, running_state, enable_motion_logging):
         if (self.motion_program_state != MotionProgramState.idle and \
