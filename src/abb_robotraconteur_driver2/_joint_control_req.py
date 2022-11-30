@@ -2,71 +2,72 @@ from . import _rws
 import threading
 from contextlib import suppress
 import traceback
+import asyncio
+import concurrent.futures
 class JointControlReq:
     def __init__(self, rws: _rws.ABBRobotRWSImpl):
         self.rws = rws
         self.error = False
         self.error_obj = None
-        self.started = False
-        self.mp_req = None
-        self._thread = None
-        self._stop = threading.Event()
+        self._mp_future = None
+        self._mp_task = None
         self._lock = threading.Lock()
-        self._stopped = threading.Event()
+        self._stopped = False
+        self._mp_state = _rws.MotionProgramState.idle
 
     @property
     def ready(self):
         if self.error:
             return False
-        req = self.mp_req
-        if req is None:
+        fut = self._mp_future
+        if fut is None or fut.done():
             return False
-        return self.rws.is_motion_program_running(req) and self.rws.motion_program_state == _rws.MotionProgramState.running_egm_joint_control
+        return self._mp_state == _rws.MotionProgramState.running_egm_joint_control
     
     def start(self):
         with self._lock:
-            self._thread = threading.Thread(target=self._run)
-            self._thread.daemon = True
-            self._thread.start()            
+            self._mp_future = asyncio.run_coroutine_threadsafe(self._run_task(), self.rws.loop)
 
     def stop(self):
-        self._stop.set()
+        with self._lock:
+            self._stopped = True
+            if self._mp_task:
+                self.rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
 
     def stop_join(self, timeout = 0.1):
         with self._lock:
-            self._stop.set()
-            t = self._thread
-            req = self.mp_req
-        if t is not None:
-            t.join(timeout)
-            self._stopped.wait(timeout=1)
-        if req is not None:
-            assert not self.rws.is_motion_program_running(req)
+            self._stopped = True
+            t = self._mp_task
+            if t is not None:
+                self.rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
+            fut = self._mp_future
+            self._mp_future = None
+        if fut is not None:
+            with suppress(concurrent.futures.CancelledError):
+                fut.result(timeout = timeout)                    
+            assert fut.done()
 
-    def _run(self):
-        try:
-            self.mp_req = self.rws.start_joint_control(self._mp_handler, False)
+    async def _run_task(self):
+        try:            
+            mp_task, mp_status = self.rws.start_joint_control(start_timeout = 0.05, enable_motion_logging=False)
+            with self._lock:
+                self._mp_task = mp_task
+                if self._stopped:
+                    self._mp_task.cancel()
+            while True:
+                state, data = await mp_status.get()
+                self._mp_state = state
+                if state in (_rws.MotionProgramState.complete, _rws.MotionProgramState.error,
+                     _rws.MotionProgramState.cancelled) \
+                    or mp_task.done():
+                    break
+            await mp_task
+
         except Exception as e:
-            self.error = True
+            self._mp_state == _rws.MotionProgramState.error
             self.error_obj = e
-            self._stopped.set()
-            return
-
-        self._stop.wait()
-
-        if not self.error:
-            req = self.mp_req
-            if req is not None:
-                # with suppress(Exception):
-                try:
-                    self.rws.stop_motion_program(self.mp_req)
-                except:
-                    traceback.print_exc()
-
-
-    def _mp_handler(self, mp, mp_state, mp_param):
-        if mp_state in (_rws.MotionProgramState.error, _rws.MotionProgramState.idle, _rws.MotionProgramState.complete):
+            traceback.print_exc()
+        finally:
             self.error = True
-            self.error_obj = Exception("Joint control stopped")
-            self._stop.set()
-            self._stopped.set()
+            if self._mp_state != _rws.MotionProgramState.error:
+                self._mp_state = _rws.MotionProgramState.complete

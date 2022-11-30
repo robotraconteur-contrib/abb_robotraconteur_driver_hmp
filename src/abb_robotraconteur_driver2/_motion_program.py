@@ -7,6 +7,8 @@ import threading
 import traceback
 import time
 from . import _rws as rws
+import asyncio
+from contextlib import suppress
 
 def rr_pose_to_abb(rr_pose):
     a = NamedArrayToArray(rr_pose)
@@ -119,178 +121,92 @@ class ExecuteMotionProgramGen:
         self._log_handle = 0
         self._save_log = save_log
         self._lock = threading.Lock()
-        self._next_handler = None
-        self._last_next = 0
-        self._exec_exp = None
-        self._req = None
+        
         self._closed = False
 
-        self._exec_current_cmd_num = -1
-        self._sent_current_cmd_num = -1
-        self._exec_queued_cmd_num = -1
-        self._sent_queued_cmd_num = -1
+        self._mp_lock = asyncio.Lock()
+        self._mp_task = None
+        self._mp_states = None
 
-    def _default_ret(self):
-        ret = self._mp_status()
-        ret.current_command = -1
-        ret.queued_command = -1
-        ret.action_status = self._status
-        return ret
-
-    def _call_next_handler(self, ret):
-        try:
-            if self._next_handler is not None:
-                h = self._next_handler
-                self._next_handler = None
-                h(ret, None)
-                self._last_next = time.perf_counter()
-        except:
-            traceback.print_exc()
-
-
-    def _call_next_handler_err(self, err):
-        self._status = self._action_status_code["error"]
-        self._exec_exp = err
-        try:
-            if self._next_handler is not None:
-                h = self._next_handler
-                self._next_handler = None
-                h(None, err)
-                self._last_next = time.perf_counter()
-        except:
-            traceback.print_exc()
-        try:
-            if self._req is not None:
-                self._rws.stop_motion_program_nolock(self._req)
-        except:
-            pass
-
-    def _do_next_update_ret(self, state, param):
         
-        if state == rws.MotionProgramState.complete:
-            self._status = self._action_status_code["complete"]
-            ret = self._default_ret()
-            self._call_next_handler(ret)
-            self._closed = True
-            return
-        if state == rws.MotionProgramState.error:
-            self._call_next_handler_err(param)
-            return
-        if state in (rws.MotionProgramState.running, rws.MotionProgramState.running_egm_joint_control,
-            rws.MotionProgramState.running_egm_path_corr, rws.MotionProgramState.running_egm_pose_control):
 
-            self._status = self._action_status_code["running"]
-
-            send = False
-            if param is not None:
-                self._exec_current_cmd_num, self._exec_queued_cmd_num = param
-                if self._exec_current_cmd_num > self._sent_current_cmd_num or \
-                    self._exec_queued_cmd_num > self._sent_queued_cmd_num:
-
-                    self._sent_current_cmd_num = self._exec_current_cmd_num
-                    self._sent_queued_cmd_num = self._exec_queued_cmd_num
-                    send = True
-            
-            if time.perf_counter() - self._last_next > 2:
-                send = True
-
-            if send:
-                ret = self._default_ret()
-                ret.current_command = self._sent_current_cmd_num
-                ret.queued_command = self._sent_queued_cmd_num
-                self._call_next_handler(ret)
-
-    def _exec_ev_handler(self, req, state, param = None):
-        with self._lock:
-            try:
-                assert req == self._req
-                self._do_next_update_ret(state, param)
-            except Exception as e:
-                self._call_next_handler_err(self, e)
-
-
+    
     def AsyncNext(self, handler):
         with self._lock:
             if self._closed:
                 raise RR.StopIterationException("")
-            try:
-                if self._exec_exp is not None:
-                    raise self._exec_exp
+            
+        if self._status == self._action_status_code["queued"]:
+            async def _start_mp():
+                try:
+                    mp_task, mp_states = self._rws.execute_motion_program(self._motion_program, 
+                        enable_motion_logging = self._save_log)
+                    
+                    with self._lock:
+                        self._mp_task = mp_task
+                        self._mp_states = mp_states
+                        if self._closed:
+                            self._mp_task.cancel()
+                    self._status = self._action_status_code["running"]
+                except BaseException as e:
+                    traceback.print_exc()
+                    err = e
+                    self._closed = True
+                    self._status = self._action_status_code["error"]
+                    handler(None, err)
+                else:
+                    ret = self._mp_status()
+                    ret.current_command = -1
+                    ret.queued_command = -1
+                    ret.action_status = self._status
+                    handler(ret, None)
+            asyncio.run_coroutine_threadsafe(_start_mp(), self._rws.loop)
+            return
+
+        if self._status == self._action_status_code["running"]:
+            async def _run_mp():
                 ret = self._mp_status()
                 ret.current_command = -1
                 ret.queued_command = -1
-                if self._status == self._action_status_code["queued"]:
-                    self._req = self._rws.execute_motion_program(self._motion_program, self._exec_ev_handler, 
-                        enable_motion_logging = False)
-                    self._status = self._action_status_code["running"]
-                    ret.action_status = self._status
-                    handler(ret, None)
-                    return
-                if self._status == self._action_status_code["complete"]:
-                    ret.action_status = self._status
-                    self._closed= True
-                    handler(ret, None)
-                    return
-                if self._status == self._action_status_code["running"]:
-                    if self._exec_current_cmd_num > self._sent_current_cmd_num or \
-                        self._exec_queued_cmd_num > self._sent_queued_cmd_num:
-
-                        self._sent_current_cmd_num = self._exec_current_cmd_num
-                        self._sent_queued_cmd_num = self._exec_queued_cmd_num
-                        ret.current_command = self._sent_current_cmd_num
-                        ret.queued_command = self._sent_queued_cmd_num
-                        handler(ret)
-                        return
-                    else:
-                        self._next_handler = handler
-                        self._last_next = time.perf_counter()
-                        return
-            except Exception as e:
-                self._action_status_code = self._action_status_code["error"]
-                self._exec_exp = e
                 try:
-                    if self._req is not None:
-                        self._rws.stop_motion_program(self._req)
-                except:
-                    pass
-                raise
+                    state, data = await self._mp_states.get()
+                    if state in (rws.MotionProgramState.running, rws.MotionProgramState.running_egm_joint_control,
+                        rws.MotionProgramState.running_egm_path_corr, rws.MotionProgramState.running_egm_pose_control):
+                        ret.current_command, ret.queued_command = data
+                    elif state in (rws.MotionProgramState.starting, rws.MotionProgramState.stopping, 
+                        rws.MotionProgramState.stop_requested, rws.MotionProgramState.stopping_egm):
+                        pass
+                    elif state == rws.MotionProgramState.complete:
+                        self._closed = True
+                        self._status = self._action_status_code["complete"]
+                        # TODO: store recording result
+                    elif state == rws.MotionProgramState.cancelled:
+                        raise RR.OperationAbortedException("Motion program cancelled")
+                    elif state == rws.MotionProgramState.error:
+                        raise data
+                    else:
+                        raise Exception(f"Unknown motion program state {state}")
+                except BaseException as e:
+                    traceback.print_exc()
+                    self._status == self._action_status_code["error"]
+                    err = e
+                    self._closed = True
+                    handler(None, err)
+                else:
+                    ret.action_status = self._status
+                    handler(ret, None)
+            asyncio.run_coroutine_threadsafe(_run_mp(), self._rws.loop)
+            return
+        raise RR.StopIterationException("")
+
                 
-
-        # self._wait_evt.wait(timeout=1)
-        # if self._thread.is_alive():
-        #     ret.action_status = self._action_status_code["running"]
-        #     return ret
-        # else:
-        #     if self._log_handle != 0:
-        #         self._status = self._action_status_code["complete"]
-        #         ret.action_status = self._status
-        #         ret.log_handle = self._log_handle
-        #         self._log_handle = 0
-        #         return ret
-        #     if self._thread_exp:
-        #         raise self._thread_exp
-        #     raise RR.StopIterationException()
-
     def Close(self):
         self._closed = True
+        with suppress(Exception):
+            self._rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
 
     def Abort(self):
-        if self._status == self._action_status_code["queued"] or self._status == self._action_status_code["running"]:
-            self._rws.stop_motion_program(self._req)
+        self._closed = True
+        with suppress(Exception):
+            self._rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
 
-    def _run(self):
-        try:
-            print("Start Motion Program!")
-            robot_log_csv = self._abb_client.execute_motion_program(self._motion_program)
-            # if self._save_log:
-            #     robot_log_io = io.StringIO(robot_log_csv.decode("ascii"))
-            #     robot_log_io.seek(0)
-            #     robot_log_np = np.genfromtxt(robot_log_io, dtype=np.float64, skip_header=1, delimiter=",")
-            #     log_handle = random.randint(0,0xFFFFFFF)
-            #     self._parent._logs[log_handle] = robot_log_np
-            #     self._log_handle = log_handle
-            print("Motion Program Complete!")
-        except BaseException as e:
-            self._thread_exp = e
-            traceback.print_exc()
-        self._wait_evt.set()

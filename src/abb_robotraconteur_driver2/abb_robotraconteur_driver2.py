@@ -21,6 +21,8 @@ from . import _rws as rws
 from ._joint_control_req import JointControlReq
 from contextlib import suppress
 from ._motion_program import MotionExecImpl
+from aioconsole import ainput
+import asyncio
 
 class ABBRobotImpl(AbstractRobot):
     def __init__(self, robot_info, robot_url):
@@ -40,6 +42,7 @@ class ABBRobotImpl(AbstractRobot):
         self._missed_egm = 10000
         self._rws = rws.ABBRobotRWSImpl(self._robot_url)
         self._joint_control_req = None
+        self._joint_control_req_last_attempt = 0
         self._motion_exec_impl = MotionExecImpl(self)
 
     def _start_robot(self):
@@ -94,7 +97,9 @@ class ABBRobotImpl(AbstractRobot):
                     jc.stop()
         if joint_ctrl_required:
             if self._joint_control_req is None:
-                if not self._rws.exec_state and not self._rws.exec_error:
+                if not self._rws.exec_state and not self._rws.exec_error \
+                    and now - self._joint_control_req_last_attempt > 0.5:
+                    self._joint_control_req_last_attempt = now
                     self._joint_control_req = JointControlReq(self._rws)
                     self._joint_control_req.start()
             if self._joint_control_req is not None:
@@ -181,17 +186,30 @@ class ABBRobotImpl(AbstractRobot):
     # Overrides for hybrid control
     @AbstractRobot.command_mode.setter
     def command_mode(self, value):
-        with self._lock:
+        self._lock.acquire()
+        locked = True
+        try:
             if self._command_mode == self._robot_command_mode["halt"] and value == 6 and not self._error and \
                 self._rws.connection_status == rws.ConnectionStatus.connected:
 
                 self._command_mode = 6
                 if self._joint_control_req is not None:
-                    self._joint_control_req.stop_join()
+                    self._joint_control_req.stop_join(0.5)
                 return
             if self._command_mode == 6 and value == self._robot_command_mode["halt"]:
                 self._command_mode = self._robot_command_mode["halt"]
+                locked = False
+                self._lock.release()
+                c = 0
+                while not self._ready:
+                    if c > 50:
+                        break
+                    c += 1
+                    time.sleep(0.01)
                 return
+        finally:
+            if locked:
+                self._lock.release()
         AbstractRobot.command_mode.fset(self, value)
 
     def _verify_robot_state(self, now):
@@ -201,7 +219,8 @@ class ABBRobotImpl(AbstractRobot):
 
         return super()._verify_robot_state(now)
 
-def main():
+async def amain():
+
     parser = argparse.ArgumentParser(description="ABB robot driver service for Robot Raconteur")
     parser.add_argument("--robot-info-file", type=argparse.FileType('r'),default=None,required=True,help="Robot info file (required)")
     parser.add_argument("--robot-url", type=str,default="http://127.0.0.1:80",help="Robot Web Services URL")
@@ -229,22 +248,27 @@ def main():
     try:
 
         robot._start_robot()
+        await asyncio.sleep(0.5)
         with RR.ServerNodeSetup("experimental.abb_robot.robot",59925,argv=rr_args):
 
             service_ctx = RRN.RegisterService("robot","experimental.abb_robot.ABBRobot",robot)
             service_ctx.SetServiceAttributes(robot_attributes)
 
-            if args.wait_signal:  
-                #Wait for shutdown signal if running in service mode          
+            if args.wait_signal:
+                #Wait for shutdown signal if running in service mode
+                exit_evt = asyncio.Event()    
                 print("Press Ctrl-C to quit...")
                 import signal
-                signal.sigwait([signal.SIGTERM,signal.SIGINT])
-            else:
-                #Wait for the user to shutdown the service
-                if (sys.version_info > (3, 0)):
-                    input("Server started, press enter to quit...")
-                else:
-                    raw_input("Server started, press enter to quit...")
+                signal.signal(signal.SIGTERM, lambda: exit_evt.set())
+                signal.signal(signal.SIGINT, lambda: exit_evt.set())
+                await exit_evt.wait()
+            else:                
+                await ainput("Server started, press enter to quit...")
             robot._close()
     except:
-        robot._close()
+        with suppress(Exception):
+            robot._close()
+        raise
+
+def main():
+    asyncio.run(amain())
