@@ -82,8 +82,6 @@ class ABBRobotRWSImpl:
         locked = False
         self.connection_status = ConnectionStatus.idle        
         while True:
-            await self._motion_program_lock.acquire()
-            locked = True
             subscription_task = None
             try:
                 if self._robot_client is None:
@@ -101,9 +99,6 @@ class ABBRobotRWSImpl:
                 
                 await self._update_state()
                 self.connection_status = ConnectionStatus.connected
-                
-                self._motion_program_lock.release()
-                locked = False
 
                 while True:
                     if self.egm_communication_failure:
@@ -287,8 +282,11 @@ class ABBRobotRWSImpl:
 
 
         await asyncio.wait_for(self._motion_program_lock.acquire(), timeout = start_timeout)
-        assert self.connection_status == ConnectionStatus.connected, "Not connected to robot"
+        
         try:
+            async with self._state_cv:
+                await asyncio.wait_for(self._state_cv.wait_for(lambda: self.connection_status == ConnectionStatus.connected),0.1)
+                assert self.connection_status == ConnectionStatus.connected, "Not connected to robot"
             self.motion_program_state == MotionProgramState.starting
             yield (MotionProgramState.starting, seqno)
             if enable_motion_logging:
@@ -309,14 +307,15 @@ class ABBRobotRWSImpl:
             try:
                 last_update = time.perf_counter()
                 while True:
-                    async with self._state_cv:
-                        if not self.exec_state:
-                            break
+                    with suppress(asyncio.TimeoutError):
+                        async with self._state_cv:
+                            if not self.exec_state:
+                                break
+                            await asyncio.wait_for(self._state_cv.wait_for(lambda: not self.exec_state or \
+                                self.exec_current_cmd_num > sent_cmd_num or \
+                                self.exec_queued_cmd_num > sent_queued_num),1)
                         cur_cmd_num = self.exec_current_cmd_num
                         cur_queued_num = self.exec_queued_cmd_num
-                        if not (cur_cmd_num > sent_cmd_num) or (cur_queued_num > sent_queued_num):                            
-                            with suppress(asyncio.TimeoutError):
-                                await asyncio.wait_for(self._state_cv.wait(),1)
                     
                     if (cur_cmd_num > sent_cmd_num) or (cur_queued_num > sent_queued_num) \
                         or time.perf_counter() - last_update > 2.5:
@@ -345,18 +344,16 @@ class ABBRobotRWSImpl:
                 yield (MotionProgramState.cancelled, None)
         
         finally:
-            if self.exec_state:
-                while True:
-                    end_time = time.perf_counter()
+            try:
+                with suppress(asyncio.TimeoutError):
                     async with self._state_cv:
-                        if not self.exec_state or (time.perf_counter() - end_time > 0.5):
-                            break
-                        with suppress(asyncio.TimeoutError):
-                            await asyncio.wait_for(self._state_cv.wait(),0.01)
-            
-            self.motion_program_state = MotionProgramState.idle
-            assert not self.exec_state, "Error ending motion program"
-            self._motion_program_lock.release()
+                        await asyncio.wait_for(self._state_cv.wait_for(lambda: self.exec_motion_program_seqno != seqno \
+                            or not self.exec_state),0.5)
+                
+                assert self.exec_motion_program_seqno != seqno or not self.exec_state, "Error ending motion program"
+            finally:
+                self.motion_program_state = MotionProgramState.idle
+                self._motion_program_lock.release()
 
     def start_joint_control(self, *, start_timeout = 0.05, enable_motion_logging = True):
         
@@ -383,6 +380,12 @@ class ABBRobotRWSImpl:
 
     def reset_errors(self):
         async def _reset_errors_task():
+            async with self._state_cv:
+                try:
+                    await asyncio.wait_for(self._state_cv.wait_for(lambda: not self.exec_state),0.05)
+                except asyncio.TimeoutError:
+                    return
+
             mp = abb_exec.MotionProgram()
             mp.WaitTime(0.001)
 
