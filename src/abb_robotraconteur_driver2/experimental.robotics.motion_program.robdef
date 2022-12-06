@@ -21,10 +21,10 @@ using com.robotraconteur.action.ActionStatusCode
 
 enum MotionProgramRobotCapabilities
     unknown = 0,
-    queuing = 1,
-    current_command,
-    queued_command,
-    motion_recording
+    queuing = 0x01,
+    current_command_feedback = 0x02,
+    queued_command_feedback = 0x04,
+    motion_recording = 0x08
 end
 
 struct RobotPose
@@ -94,13 +94,22 @@ struct FreeformCommand
 end
 
 struct MotionProgram
+    field varvalue{list} motion_setup_commands
     field varvalue{list} motion_program_commands
+    field varvalue{string} extended
+end
+
+struct MotionProgramCommandInfo
+    field string command_name
+    field string{list} freeform_command_names
+    field string{list} command_struct_types
     field varvalue{string} extended
 end
 
 struct MotionProgramRobotInfo
     field RobotInfo robot_info
-    field string{list} supported_commands
+    field MotionProgramCommandInfo{list} supported_setup_commands
+    field MotionProgramCommandInfo{list} supported_motion_commands
     field uint32 motion_program_robot_capabilities 
     field varvalue{string} extended
 end
