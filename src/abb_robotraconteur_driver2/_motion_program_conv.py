@@ -159,6 +159,44 @@ class SetPayloadCommandConv:
         abb_payload = rr_payload_to_abb(cmd_get_arg(cmd,"payload_info"),cmd_get_arg(cmd,"payload_pose"))
         setup_args["gripload"] = abb_payload
 
+# ABB Commands
+
+class CirPathModeCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.CirPathModeCommand"]
+    freeform_names = ["CirPathMode", "CirPathModeCommand", "experimental.abb_robot.motion_program.CirPathModeCommand"]
+
+    def apply_rr_command(self, cmd, mp):
+        rr_switch = cmd_get_arg(cmd, "switch")
+        if rr_switch == 1 or rr_switch == "PathFrame":
+            switch = abb_exec.CirPathModeSwitch.PathFrame
+        elif rr_switch == 2 or rr_switch == "ObjectFrame":
+            switch = abb_exec.CirPathModeSwitch.ObjectFrame
+        elif rr_switch == 3 or rr_switch == "CirPointOri":
+            switch = abb_exec.CirPathModeSwitch.CirPointOri
+        elif rr_switch == 4 or rr_switch == "Wrist45":
+            switch = abb_exec.CirPathModeSwitch.Wrist45
+        elif rr_switch == 5 or rr_switch == "Wrist46":
+            switch = abb_exec.CirPathModeSwitch.Wrist46
+        elif rr_switch == 6 or rr_switch == "Wrist56":
+            switch = abb_exec.CirPathModeSwitch.Wrist56
+        else:
+            assert False, f"Invalid CirPathModeSwitch value: {rr_switch}"
+        mp.CirPathMode(switch)
+
+class SyncMoveOnCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.SyncMoveOnCommand"]
+    freeform_names = ["SyncMoveOn", "SyncMoveOnCommand", "experimental.abb_robot.motion_program.SyncMoveOnCommand"]
+
+    def apply_rr_command(self, cmd, mp):
+        mp.SyncMoveOn()
+
+class SyncMoveOffCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.SyncMoveOffCommand"]
+    freeform_names = ["SyncMoveOff", "SyncMoveOffCommand", "experimental.abb_robot.motion_program.SyncMoveOffCommand"]
+
+    def apply_rr_command(self, cmd, mp):
+        mp.SyncMoveOff()
+
 _command_convs = dict()
 _freeform_command_convs = dict()
 
@@ -169,7 +207,10 @@ _conv_types = [
     MoveCCommandConv,
     WaitTimeCommandConv,
     SetToolCommandConv,
-    SetPayloadCommandConv
+    SetPayloadCommandConv,
+    CirPathModeCommandConv,
+    SyncMoveOnCommandConv,
+    SyncMoveOffCommandConv
 ]
 
 def _init_convs():

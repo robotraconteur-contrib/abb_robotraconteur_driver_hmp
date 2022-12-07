@@ -253,6 +253,7 @@ async def amain():
 
             service_ctx = RRN.RegisterService("robot","experimental.abb_robot.ABBRobot",robot)
             service_ctx.SetServiceAttributes(robot_attributes)
+            service_ctx.AddExtraImport("experimental.abb_robot.motion_program")
 
             if args.wait_signal:
                 #Wait for shutdown signal if running in service mode
