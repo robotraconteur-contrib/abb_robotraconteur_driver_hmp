@@ -83,6 +83,7 @@ end
 
 struct SetPayloadCommand
     field PayloadInfo payload_info
+    field Pose payload_pose
     field varvalue{string} extended
 end
 
