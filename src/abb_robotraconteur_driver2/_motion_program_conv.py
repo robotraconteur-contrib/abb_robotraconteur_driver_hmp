@@ -3,22 +3,43 @@ from RobotRaconteur.RobotRaconteurPythonUtil import NamedArrayToArray
 import numpy as np
 import abb_motion_program_exec as abb_exec
 import RobotRaconteur as RR
+import general_robotics_toolbox as rox
 
 def rr_pose_to_abb(rr_pose):
     a = NamedArrayToArray(rr_pose)
     return abb_exec.pose(a[0][4:7]*1000.0,a[0][0:4])
 
+def rr_inertia_to_loaddata_abb(rr_inertia, rr_inertia_pose = None):
+    ii = NamedArrayToArray(rr_inertia)[0]
+    # ii[0] = m
+    # ii[1:4] = com
+    # ii[4] = Ixx
+    # ii[5] = Ixy
+    # ii[6] = Ixz
+    # ii[7] = Iyy
+    # ii[8] = Iyz
+    # ii[9] = Izz
+    mass = ii[0]
+    com = ii[1:4]
+    I = np.array([[ii[4],ii[5],ii[6]],[ii[5],ii[7],ii[8]],[ii[6],ii[8],ii[9]]])
+    w_eig,v_eig = np.linalg.eig(I)
+    R = np.column_stack([v_eig[:,0], v_eig[:,1], np.cross(v_eig[:,0], v_eig[:,1])])
+    aom = rox.R2q(R)
+    ix, iy, iz = w_eig
+
+    if rr_inertia_pose is not None:
+        com = np.add(com, NamedArrayToArray(rr_inertia_pose[0]["position"]))
+        aom = rox.quatproduct(NamedArrayToArray(rr_inertia_pose[0]["orientation"])) @ aom
+    
+    return abb_exec.loaddata(mass, com, aom, ix, iy, iz)
+
 def rr_tool_to_abb(rr_tool_info):
     tcp = rr_pose_to_abb(rr_tool_info.tcp)
-    mass = rr_tool_info.inertia[0]["m"]
-    com = NamedArrayToArray(rr_tool_info.inertia[0]["com"])
-    #TODO: figure out aom term in loaddata
-    aom = np.array([1,0,0,0],dtype=np.float64)
-    ix = rr_tool_info.inertia[0]["ixx"]
-    iy = rr_tool_info.inertia[0]["iyy"]
-    iz = rr_tool_info.inertia[0]["izz"]
-    ld = abb_exec.loaddata(mass, com, aom, ix, iy, iz)
+    ld = rr_inertia_to_loaddata_abb(rr_tool_info.inertia)
     return abb_exec.tooldata(True,tcp,ld)
+
+def rr_payload_to_abb(rr_payload_info, rr_payload_pose):
+    return rr_inertia_to_loaddata_abb(rr_payload_info.inertia, rr_payload_pose)
 
 def rr_zone_to_abb(rr_fine_point,rr_blend_radius):
     r = rr_blend_radius * 1000.0
@@ -127,6 +148,17 @@ class SetToolCommandConv:
         abb_tool = rr_tool_to_abb(cmd_get_arg(cmd,"tool_info"))
         setup_args["tool"] = abb_tool
 
+class SetPayloadCommandConv:
+    rr_types = ["experimental.robotics.motion_program.SetPayloadCommand"]
+    freeform_names = ["SetPayload", "SetPayloadCommand", "experimental.robotics.motion_program.SetPayloadCommand"]
+
+    def apply_rr_command(self, cmd, mp):
+        assert False, "Unsupported in motion command section"
+
+    def add_setup_args(self, cmd, setup_args):
+        abb_payload = rr_payload_to_abb(cmd_get_arg(cmd,"payload_info"),cmd_get_arg(cmd,"payload_pose"))
+        setup_args["gripload"] = abb_payload
+
 _command_convs = dict()
 _freeform_command_convs = dict()
 
@@ -136,7 +168,8 @@ _conv_types = [
     MoveLCommandConv,
     MoveCCommandConv,
     WaitTimeCommandConv,
-    SetToolCommandConv
+    SetToolCommandConv,
+    SetPayloadCommandConv
 ]
 
 def _init_convs():
