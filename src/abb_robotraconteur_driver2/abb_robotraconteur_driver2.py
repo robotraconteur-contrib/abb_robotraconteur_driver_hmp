@@ -154,6 +154,8 @@ class ABBRobotImpl(AbstractRobot):
     def _close(self):
         if self._egm_client is not None:
             self.egm_client.close()
+        with suppress(Exception):
+            self._rws.send_stop_all()
         return super()._close()
 
     def execute_motion_program(self, program, queue):

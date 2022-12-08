@@ -399,3 +399,5 @@ class ABBRobotRWSImpl:
         fut = asyncio.run_coroutine_threadsafe(_reset_errors_task(), self.loop)
         fut.result()
 
+    def send_stop_all(self):
+        self._user_robot_client.stop()
