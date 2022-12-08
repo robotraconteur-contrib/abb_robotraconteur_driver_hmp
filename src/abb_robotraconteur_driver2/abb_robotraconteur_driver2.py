@@ -48,6 +48,8 @@ class ABBRobotImpl(AbstractRobot):
     def _start_robot(self):
         self._egm = EGM()
         self._rws.start()
+        self._joint_control_req = JointControlReq(self._rws)
+        self._joint_control_req.start()
         self._missed_egm = 10000
         super()._start_robot()
         time.sleep(0.5)
@@ -84,33 +86,11 @@ class ABBRobotImpl(AbstractRobot):
                 self._missed_egm = 0
         if robot_state is None:
             self._missed_egm += 1
-        joint_ctrl_required = False
-        joint_ctrl_ready = False
-        joint_ctrl_error = False
-        if self._command_mode in (0,1,2,3):
-            joint_ctrl_required = True
-        else:
-            with suppress(Exception):
-                jc = self._joint_control_req
-                if jc is not None:
-                    self._joint_control_req = None
-                    jc.stop()
-        if joint_ctrl_required:
-            if self._joint_control_req is None:
-                if not self._rws.exec_state and not self._rws.exec_error \
-                    and now - self._joint_control_req_last_attempt > 0.5:
-                    self._joint_control_req_last_attempt = now
-                    self._joint_control_req = JointControlReq(self._rws)
-                    self._joint_control_req.start()
-            if self._joint_control_req is not None:
-                joint_ctrl_error = self._joint_control_req.error
-                joint_ctrl_ready = self._joint_control_req.ready
-
-                if joint_ctrl_error:
-                    with suppress(Exception):
-                        jc = self._joint_control_req                    
-                        self._joint_control_req = None
-                        jc.stop()
+        joint_ctrl_required = self._command_mode in (0,1,2,3)
+        joint_ctrl_error = self._joint_control_req.error_obj is not None
+        joint_ctrl_ready = self._joint_control_req.ready
+        
+        self._joint_control_req.loop_set_enabled(joint_ctrl_required)
 
         if robot_state is not None:
             egm_last_recv = self._stopwatch_ellapsed_s()
@@ -193,19 +173,13 @@ class ABBRobotImpl(AbstractRobot):
                 self._rws.connection_status == rws.ConnectionStatus.connected:
 
                 self._command_mode = 6
-                if self._joint_control_req is not None:
-                    self._joint_control_req.stop_join(0.5)
+                time.sleep(0.02)
+                self._joint_control_req.disable(timeout=0.5)
                 return
             if self._command_mode == 6 and value == self._robot_command_mode["halt"]:
                 self._command_mode = self._robot_command_mode["halt"]
-                locked = False
-                self._lock.release()
-                c = 0
-                while not self._ready:
-                    if c > 50:
-                        break
-                    c += 1
-                    time.sleep(0.01)
+                time.sleep(0.02)
+                self._joint_control_req.enable(timeout=0.5)
                 return
         finally:
             if locked:
