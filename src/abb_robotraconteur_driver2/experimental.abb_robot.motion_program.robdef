@@ -4,6 +4,7 @@ import com.robotraconteur.geometry
 import experimental.robotics.motion_program
 
 using com.robotraconteur.geometry.Pose
+using com.robotraconteur.geometry.Point
 using experimental.robotics.motion_program.RobotPose
 
 enum CirPathModeSwitch
@@ -47,7 +48,7 @@ struct EGMRunPoseCommand
     field double cond_time
     field double ramp_in_time
     field double ramp_out_time
-    field double offset
+    field Pose offset
     field varvalue{string} extended
 end
 
@@ -102,12 +103,34 @@ struct EGMPoseTargetConfigCommand
     field egm_minmax rx
     field egm_minmax ry
     field egm_minmax rz
-    field double max_pos_deviation
+    field double max_position_deviation
     field double max_speed_deviation
     field varvalue{string} extended
 end
 
-struct EGMPathCorrectionConfig
+struct EGMPathCorrectionConfigCommand
     field Pose sensor_frame
     field varvalue{string} extended
 end
+
+struct EGMJointTarget
+    field uint64 seqno
+    field uint64 state_seqno
+    field double[] joints
+    field double[] external_joints
+end
+
+struct EGMPoseTarget
+    field uint64 seqno
+    field uint64 state_seqno
+    field Pose cartesian
+    field double[] external_joints
+end
+
+struct EGMPathCorrection
+    field uint64 seqno
+    field uint64 state_seqno
+    field Point pos
+    field uint32 age
+end
+

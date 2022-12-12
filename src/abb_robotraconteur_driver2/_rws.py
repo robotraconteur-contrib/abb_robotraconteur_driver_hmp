@@ -314,8 +314,8 @@ class ABBRobotRWSImpl:
                             await asyncio.wait_for(self._state_cv.wait_for(lambda: not self.exec_state or \
                                 self.exec_current_cmd_num > sent_cmd_num or \
                                 self.exec_queued_cmd_num > sent_queued_num),1)
-                        cur_cmd_num = self.exec_current_cmd_num
-                        cur_queued_num = self.exec_queued_cmd_num
+                    cur_cmd_num = self.exec_current_cmd_num
+                    cur_queued_num = self.exec_queued_cmd_num
                     
                     if (cur_cmd_num > sent_cmd_num) or (cur_queued_num > sent_queued_num) \
                         or time.perf_counter() - last_update > 2.5:
@@ -348,9 +348,9 @@ class ABBRobotRWSImpl:
                 with suppress(asyncio.TimeoutError):
                     async with self._state_cv:
                         await asyncio.wait_for(self._state_cv.wait_for(lambda: self.exec_motion_program_seqno != seqno \
-                            or not self.exec_state),0.5)
+                            or not self.exec_state),1)
                 
-                assert self.exec_motion_program_seqno != seqno or not self.exec_state, "Error ending motion program"
+                #assert self.exec_motion_program_seqno != seqno or not self.exec_state, "Error ending motion program"
             finally:
                 self.motion_program_state = MotionProgramState.idle
                 self._motion_program_lock.release()
@@ -401,3 +401,4 @@ class ABBRobotRWSImpl:
 
     def send_stop_all(self):
         self._user_robot_client.stop()
+

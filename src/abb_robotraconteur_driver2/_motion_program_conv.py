@@ -55,15 +55,20 @@ def rr_joints_to_abb(rr_joints, rr_joint_units):
     #TODO: use "extended" for external axes
     return abb_exec.jointtarget(np.rad2deg(rr_joints), [6e5]*6)
 
-def rr_robot_pose_to_abb(rr_robot_pose):
+def rr_robot_pose_to_abb(rr_robot_pose, cfx_robot):
     #TODO: joint units
     #TODO: use "extended" for external axes
     p = rr_pose_to_abb(rr_robot_pose.tcp_pose)
+    wrist_vs_axis1 = rox.fwdkin(cfx_robot, [0,rr_robot_pose.joint_position_seed[1],
+        rr_robot_pose.joint_position_seed[2],0,0,0]).p[0] < 0
+    wrist_vs_lower_arm = rox.fwdkin(cfx_robot, [0,0,rr_robot_pose.joint_position_seed[2],0,0,0]).p[0] < 0
+    axis_5_sign = rr_robot_pose.joint_position_seed[4] < 0
+    cfx = np.packbits([axis_5_sign, wrist_vs_lower_arm, wrist_vs_axis1], bitorder='little').item()
     cd = abb_exec.confdata(
         np.floor(rr_robot_pose.joint_position_seed[0]/(np.pi/2)),
         np.floor(rr_robot_pose.joint_position_seed[3]/(np.pi/2)),
         np.floor(rr_robot_pose.joint_position_seed[5]/(np.pi/2)),
-        0
+        cfx
     )
     return abb_exec.robtarget(p.trans,p.rot,cd, [6e5]*6)
 
@@ -93,7 +98,7 @@ class MoveAbsJCommandConv:
     rr_types = ["experimental.robotics.motion_program.MoveAbsJCommand"]
     freeform_names = ["MoveAbsJ", "MoveAbsJCommand", "experimental.robotics.motion_program.MoveAbsJCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, **kwargs):
         zd = rr_zone_to_abb(cmd_get_arg(cmd,"fine_point"),cmd_get_arg(cmd,"blend_radius"))
         sd = rr_speed_to_abb(cmd_get_arg(cmd, "tcp_velocity"))
         jt = rr_joints_to_abb(cmd_get_arg(cmd,"joint_position"), cmd_get_arg(cmd,"joint_units", []))
@@ -103,45 +108,45 @@ class MoveJCommandConv:
     rr_types = ["experimental.robotics.motion_program.MoveJCommand"]
     freeform_names = ["MoveJ","MoveJCommand","experimental.robotics.motion_program.MoveJCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, cfx_robot, **kwargs):
         zd = rr_zone_to_abb(cmd_get_arg(cmd,"fine_point"),cmd_get_arg(cmd,"blend_radius"))
         sd = rr_speed_to_abb(cmd_get_arg(cmd,"tcp_velocity"))
-        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"))
+        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"), cfx_robot)
         mp.MoveJ(rt, sd, zd)
 
 class MoveLCommandConv:
     rr_types = ["experimental.robotics.motion_program.MoveLCommand"]
     freeform_names = ["MoveL","MoveLCommand","experimental.robotics.motion_program.MoveLCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, cfx_robot, **kwargs):
         zd = rr_zone_to_abb(cmd_get_arg(cmd,"fine_point"),cmd_get_arg(cmd,"blend_radius"))
         sd = rr_speed_to_abb(cmd_get_arg(cmd,"tcp_velocity"))
-        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"))
+        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"), cfx_robot)
         mp.MoveL(rt, sd, zd)
 
 class MoveCCommandConv:
     rr_types = ["experimental.robotics.motion_program.MoveCCommand"]
     freeform_names = ["MoveC","MoveCCommand","experimental.robotics.motion_program.MoveCCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, cfx_robot, **kwargs):
         zd = rr_zone_to_abb(cmd_get_arg(cmd,"fine_point"),cmd_get_arg(cmd,"blend_radius"))
         sd = rr_speed_to_abb(cmd_get_arg(cmd,"tcp_velocity"))
         rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"))
-        rt2 = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_via_pose"))
+        rt2 = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_via_pose"), cfx_robot)
         mp.MoveC(rt2, rt,  sd, zd)
 
 class WaitTimeCommandConv:
     rr_types = ["experimental.robotics.motion_program.WaitTimeCommand"]
     freeform_names = ["WaitTime", "SetToolCommand", "experimental.robotics.motion_program.WaitTimeCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, **kwargs):
         mp.WaitTime(cmd_get_arg(cmd, "time"))
 
 class SetToolCommandConv:
     rr_types = ["experimental.robotics.motion_program.SetToolCommand"]
     freeform_names = ["SetTool", "SetToolCommand", "experimental.robotics.motion_program.SetToolCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, **kwargs):
         assert False, "Unsupported in motion command section"
 
     def add_setup_args(self, cmd, setup_args):
@@ -152,7 +157,7 @@ class SetPayloadCommandConv:
     rr_types = ["experimental.robotics.motion_program.SetPayloadCommand"]
     freeform_names = ["SetPayload", "SetPayloadCommand", "experimental.robotics.motion_program.SetPayloadCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, **kwargs):
         assert False, "Unsupported in motion command section"
 
     def add_setup_args(self, cmd, setup_args):
@@ -165,7 +170,7 @@ class CirPathModeCommandConv:
     rr_types = ["experimental.abb_robot.motion_program.CirPathModeCommand"]
     freeform_names = ["CirPathMode", "CirPathModeCommand", "experimental.abb_robot.motion_program.CirPathModeCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, **kwargs):
         rr_switch = cmd_get_arg(cmd, "switch")
         if rr_switch == 1 or rr_switch == "PathFrame":
             switch = abb_exec.CirPathModeSwitch.PathFrame
@@ -187,15 +192,146 @@ class SyncMoveOnCommandConv:
     rr_types = ["experimental.abb_robot.motion_program.SyncMoveOnCommand"]
     freeform_names = ["SyncMoveOn", "SyncMoveOnCommand", "experimental.abb_robot.motion_program.SyncMoveOnCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, **kwargs):
         mp.SyncMoveOn()
 
 class SyncMoveOffCommandConv:
     rr_types = ["experimental.abb_robot.motion_program.SyncMoveOffCommand"]
     freeform_names = ["SyncMoveOff", "SyncMoveOffCommand", "experimental.abb_robot.motion_program.SyncMoveOffCommand"]
 
-    def apply_rr_command(self, cmd, mp):
+    def apply_rr_command(self, cmd, mp, **kwargs):
         mp.SyncMoveOff()
+
+# ABB EGM Commands
+
+class EGMStreamConfigCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMStreamConfigCommand"]
+    freeform_names = ["EGMStreamConfig", "EGMStreamConfigCommand", "experimental.abb_robot.motion_program.EGMStreamConfigCommand"]
+
+    def apply_rr_command(self, cmd, mp, **kwargs):
+        assert False, "Unsupported in motion command section"
+
+    def add_setup_args(self, cmd, setup_args):
+        setup_args["egm_config"] = abb_exec.EGMStreamConfig()
+
+def rr_egmframetype_to_abb(rr_egmframetype):
+    if rr_egmframetype == 0 or rr_egmframetype == "EGM_FRAME_BASE":
+        return abb_exec.egmframetype.EGM_FRAME_BASE
+    elif rr_egmframetype == 1 or rr_egmframetype == "EGM_FRAME_TOOL":
+        return abb_exec.egmframetype.EGM_FRAME_TOOL
+    elif rr_egmframetype == 2 or rr_egmframetype == "EGM_FRAME_WOBJ":
+        return abb_exec.egmframetype.EGM_FRAME_WOBJ
+    elif rr_egmframetype == 3 or rr_egmframetype == "EGM_FRAME_WORLD":
+        return abb_exec.egmframetype.EGM_FRAME_WORLD
+    elif rr_egmframetype == 4 or rr_egmframetype == "EGM_FRAME_JOINT":
+        return abb_exec.egmframetype.EGM_FRAME_JOINT
+    else:
+        assert False, f"Invalid egmframetype value: {rr_egmframetype}"
+
+def rr_egmminmax_to_abb(rr_egmminmax):
+    if not isinstance(rr_egmminmax, RR.VarValue):
+        min_ = rr_egmminmax.min
+        max_ = rr_egmminmax.max
+        return abb_exec.egm_minmax(min_, max_)
+    else:
+        min_ = rr_egmminmax.data["min"].data
+        max_ = rr_egmminmax.data["max"].data
+        return abb_exec.egm_minmax(min_, max_)
+
+class EGMJointTargetConfigCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMJointTargetConfigCommand"]
+    freeform_names = ["EGMJointTargetConfig", "EGMJointTargetConfigCommand", "experimental.abb_robot.motion_program.EGMJointTargetConfigCommand"]
+
+    def apply_rr_command(self, cmd, mp, **kwargs):
+        assert False, "Unsupported in motion command section"
+
+    def add_setup_args(self, cmd, setup_args):
+        J1 = rr_egmminmax_to_abb(cmd_get_arg(cmd, "J1"))
+        J2 = rr_egmminmax_to_abb(cmd_get_arg(cmd, "J2"))
+        J3 = rr_egmminmax_to_abb(cmd_get_arg(cmd, "J3"))
+        J4 = rr_egmminmax_to_abb(cmd_get_arg(cmd, "J4"))
+        J5 = rr_egmminmax_to_abb(cmd_get_arg(cmd, "J5"))
+        J6 = rr_egmminmax_to_abb(cmd_get_arg(cmd, "J6"))
+        max_position_deviation = cmd_get_arg(cmd, "max_position_deviation")
+        max_speed_deviation = cmd_get_arg(cmd, "max_speed_deviation")
+        setup_args["egm_config"] = abb_exec.EGMJointTargetConfig(J1, J2, J3, J4, J5, J6, max_position_deviation,
+            max_speed_deviation)
+
+class EGMPoseTargetConfigCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMPoseTargetConfigCommand"]
+    freeform_names = ["EGMPoseTargetConfig", "EGMPoseTargetConfigCommand", "experimental.abb_robot.motion_program.EGMPoseTargetConfigCommand"]
+
+    def apply_rr_command(self, cmd, mp, **kwargs):
+        assert False, "Unsupported in motion command section"
+
+    def add_setup_args(self, cmd, setup_args):
+        corr_frame = rr_pose_to_abb(cmd_get_arg(cmd, "corr_frame"))
+        corr_fr_type = rr_egmframetype_to_abb(cmd_get_arg(cmd, "corr_fr_type"))
+        sensor_frame = rr_pose_to_abb(cmd_get_arg(cmd, "sensor_frame"))
+        sensor_fr_type = rr_egmframetype_to_abb(cmd_get_arg(cmd, "sensor_fr_type"))
+        x = rr_egmminmax_to_abb(cmd_get_arg(cmd, "x"))
+        y = rr_egmminmax_to_abb(cmd_get_arg(cmd, "y"))
+        z = rr_egmminmax_to_abb(cmd_get_arg(cmd, "z"))
+        rx = rr_egmminmax_to_abb(cmd_get_arg(cmd, "rx"))
+        ry = rr_egmminmax_to_abb(cmd_get_arg(cmd, "ry"))
+        rz = rr_egmminmax_to_abb(cmd_get_arg(cmd, "rz"))
+        max_position_deviation = cmd_get_arg(cmd, "max_position_deviation")
+        max_speed_deviation = cmd_get_arg(cmd, "max_speed_deviation")
+        setup_args["egm_config"] = abb_exec.EGMPoseTargetConfig(corr_frame, corr_fr_type, sensor_frame, sensor_fr_type,
+            x, y, z, rx, ry, rz, max_position_deviation, max_speed_deviation)
+
+class EGMPathCorrectionConfigCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMPathCorrectionConfigCommand"]
+    freeform_names = ["EGMPathCorrectionConfig", "EGMPathCorrectionConfigCommand", "experimental.abb_robot.motion_program.EGMPathCorrectionConfigCommand"]
+
+    def apply_rr_command(self, cmd, mp, **kwargs):
+        assert False, "Unsupported in motion command section"
+
+    def add_setup_args(self, cmd, setup_args):
+        sensor_frame = rr_pose_to_abb(cmd_get_arg(cmd, "sensor_frame"))
+        setup_args["egm_config"] = abb_exec.EGMPathCorrectionConfig(sensor_frame)
+
+class EGMRunJointCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMRunJointCommand"]
+    freeform_names = ["EGMRunJoint", "EGMRunJointCommand", "experimental.abb_robot.motion_program.EGMRunJointCommand"]
+
+    def apply_rr_command(self, cmd, mp, **kwargs):
+        cond_time = cmd_get_arg(cmd, "cond_time")
+        ramp_in_time = cmd_get_arg(cmd, "ramp_in_time")
+        ramp_out_time = cmd_get_arg(cmd, "ramp_out_time")
+        mp.EGMRunJoint(cond_time, ramp_in_time, ramp_out_time)
+
+class EGMRunPoseCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMRunPoseCommand"]
+    freeform_names = ["EGMRunPose", "EGMRunPoseCommand", "experimental.abb_robot.motion_program.EGMRunPoseCommand"]
+
+    def apply_rr_command(self, cmd, mp, cfx_robot, **kwargs):
+        cond_time = cmd_get_arg(cmd, "cond_time")
+        ramp_in_time = cmd_get_arg(cmd, "ramp_in_time")
+        ramp_out_time = cmd_get_arg(cmd, "ramp_out_time")
+        offset = rr_pose_to_abb(cmd_get_arg(cmd, "offset"))
+        mp.EGMRunPose(cond_time, ramp_in_time, ramp_out_time, offset)
+
+class EGMMoveLCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMMoveLCommand"]
+    freeform_names = ["EGMMoveL","EGMMoveLCommand","experimental.abb_robot.motion_program.EGMMoveLCommand"]
+
+    def apply_rr_command(self, cmd, mp, cfx_robot, **kwargs):
+        zd = rr_zone_to_abb(cmd_get_arg(cmd,"fine_point"),cmd_get_arg(cmd,"blend_radius"))
+        sd = rr_speed_to_abb(cmd_get_arg(cmd,"tcp_velocity"))
+        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"),cfx_robot)
+        mp.EGMMoveL(rt, sd, zd)
+
+class EGMMoveCCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.EGMMoveCCommand"]
+    freeform_names = ["EGMMoveC","EGMMoveCCommand","experimental.abb_robot.motion_program.EGMMoveCCommand"]
+
+    def apply_rr_command(self, cmd, mp, cfx_robot,**kwargs):
+        zd = rr_zone_to_abb(cmd_get_arg(cmd,"fine_point"),cmd_get_arg(cmd,"blend_radius"))
+        sd = rr_speed_to_abb(cmd_get_arg(cmd,"tcp_velocity"))
+        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"),cfx_robot)
+        rt2 = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_via_pose"),cfx_robot)
+        mp.EGMMoveC(rt2, rt,  sd, zd)
 
 _command_convs = dict()
 _freeform_command_convs = dict()
@@ -210,7 +346,15 @@ _conv_types = [
     SetPayloadCommandConv,
     CirPathModeCommandConv,
     SyncMoveOnCommandConv,
-    SyncMoveOffCommandConv
+    SyncMoveOffCommandConv,
+    EGMStreamConfigCommandConv,
+    EGMJointTargetConfigCommandConv,    
+    EGMPoseTargetConfigCommandConv,
+    EGMPathCorrectionConfigCommandConv,
+    EGMRunJointCommandConv,
+    EGMRunPoseCommandConv,
+    EGMMoveLCommandConv,
+    EGMMoveCCommandConv
 ]
 
 def _init_convs():
@@ -241,15 +385,22 @@ def get_command_conv(cmd):
         assert conv is not None, f"Unknown command {cmd.datatype}"
         return conv
 
-def apply_rr_motion_command_to_mp(cmd, mp):
+def apply_rr_motion_command_to_mp(cmd, mp, **kwargs):
     conv = get_command_conv(cmd)
-    conv.apply_rr_command(cmd, mp)
+    conv.apply_rr_command(cmd, mp, **kwargs)
 
 def add_rr_motion_setup_args(cmd, setup_args):
     conv = get_command_conv(cmd)
     conv.add_setup_args(cmd, setup_args)
 
-def rr_motion_program_to_abb(rr_mp):
+def rr_motion_program_to_abb(rr_mp, robot):
+
+    # Robot structure for computing confdata.cfx from joint seed
+    P_cfx_w = np.copy(robot.P)
+    P_cfx_w[:,0] = 0.0
+    P_cfx_w[:,5:7] = 0.0    
+    cfx_robot = rox.Robot(robot.H, P_cfx_w, robot.joint_type)
+
     setup_args = dict()
     for setup_cmd in rr_mp.motion_setup_commands:
         #with suppress(OptionalCommandException):
@@ -257,6 +408,6 @@ def rr_motion_program_to_abb(rr_mp):
     mp = abb_exec.MotionProgram(**setup_args)
     for cmd in rr_mp.motion_program_commands:
         #with suppress(OptionalCommandException):
-            apply_rr_motion_command_to_mp(cmd, mp)
+            apply_rr_motion_command_to_mp(cmd, mp, robot=robot, cfx_robot=cfx_robot)
         
     return mp

@@ -12,6 +12,7 @@ import com.robotraconteur.device.isoch
 import com.robotraconteur.device.clock
 import com.robotraconteur.robotics.robot
 import experimental.robotics.motion_program
+import experimental.abb_robot.motion_program
 
 using com.robotraconteur.geometry.Pose
 using com.robotraconteur.geometry.SpatialVelocity
@@ -41,6 +42,9 @@ using experimental.robotics.motion_program.MotionProgramRobotInfo
 using experimental.robotics.motion_program.MotionProgram
 using experimental.robotics.motion_program.MotionProgramStatus
 using experimental.robotics.motion_program.MotionProgramRecordingPart
+using experimental.abb_robot.motion_program.EGMJointTarget
+using experimental.abb_robot.motion_program.EGMPoseTarget
+using experimental.abb_robot.motion_program.EGMPathCorrection
 
 enum ABBRobotCommandMode
     invalid_state = -1,
@@ -102,7 +106,7 @@ object ABBRobot
     function MotionProgramRecordingPart{generator} read_recording(uint32 recording_handle)
     function void clear_recordings()
 
-    wire double[] egm_joint_command [writeonly]
-    wire Pose egm_pose_command [writeonly]
-    wire double[] egm_correction_command [writeonly]
+    wire EGMJointTarget egm_joint_command [writeonly]
+    wire EGMPoseTarget egm_pose_command [writeonly]
+    wire EGMPathCorrection egm_path_correction_command [writeonly]
 end object

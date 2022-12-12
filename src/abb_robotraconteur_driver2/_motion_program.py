@@ -19,7 +19,7 @@ class MotionExecImpl:
 
     def execute_motion_program(self, program):
 
-        abb_program = rr_motion_program_to_abb(program)
+        abb_program = rr_motion_program_to_abb(program, self.abb_robot_impl._rox_robots[0])
 
         gen = ExecuteMotionProgramGen(self, self.rws, abb_program)
 
@@ -53,9 +53,9 @@ class ExecuteMotionProgramGen:
 
     
     def AsyncNext(self, handler):
-        with self._lock:
-            if self._closed:
-                raise RR.StopIterationException("")
+        # with self._lock:
+        #     if self._closed:
+        #         raise RR.StopIterationException("")
             
         if self._status == self._action_status_code["queued"]:
             async def _start_mp():
@@ -74,6 +74,8 @@ class ExecuteMotionProgramGen:
                     err = e
                     self._closed = True
                     self._status = self._action_status_code["error"]
+                    with suppress(Exception):
+                        self._mp_task.cancel()
                     handler(None, err)
                 else:
                     ret = self._mp_status()
@@ -101,6 +103,7 @@ class ExecuteMotionProgramGen:
                         self._closed = True
                         self._status = self._action_status_code["complete"]
                         # TODO: store recording result
+                        raise RR.StopIterationException("")
                     elif state == rws.MotionProgramState.cancelled:
                         raise RR.OperationAbortedException("Motion program cancelled")
                     elif state == rws.MotionProgramState.error:
@@ -109,7 +112,7 @@ class ExecuteMotionProgramGen:
                         raise Exception(f"Unknown motion program state {state}")
                 except BaseException as e:
                     traceback.print_exc()
-                    self._status == self._action_status_code["error"]
+                    self._status = self._action_status_code["error"]
                     err = e
                     self._closed = True
                     handler(None, err)
@@ -122,12 +125,18 @@ class ExecuteMotionProgramGen:
 
                 
     def Close(self):
-        self._closed = True
-        with suppress(Exception):
-            self._rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            with suppress(Exception):
+                self._rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
 
     def Abort(self):
-        self._closed = True
-        with suppress(Exception):
-            self._rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            with suppress(Exception):
+                self._rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
 

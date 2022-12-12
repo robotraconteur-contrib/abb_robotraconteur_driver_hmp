@@ -45,6 +45,13 @@ class ABBRobotImpl(AbstractRobot):
         self._joint_control_req_last_attempt = 0
         self._motion_exec_impl = MotionExecImpl(self)
 
+    def RRServiceObjectInit(self, context, service_path):
+        super().RRServiceObjectInit(context, service_path)
+
+        self.egm_joint_command.InValueChanged += self._egm_joint_command_invalue_changed
+        self.egm_pose_command.InValueChanged += self._egm_pose_command_invalue_changed
+        self.egm_path_correction_command.InValueChanged += self._egm_correction_command_invalue_changed
+
     def _start_robot(self):
         self._egm = EGM()
         self._rws.start()
@@ -64,8 +71,6 @@ class ABBRobotImpl(AbstractRobot):
 
     def _send_reset_errors(self, handler):
         self._rws.reset_errors()
-        if self._error:
-            self._joint_control_req = None
         with suppress(Exception):
             self.command_mode = 0
         self._node.PostToThreadPool(lambda: handler(None))
@@ -163,6 +168,31 @@ class ABBRobotImpl(AbstractRobot):
         assert self._command_mode == 6, "Invalid mode for motion program"
 
         return self._motion_exec_impl.execute_motion_program(program)
+
+    def _egm_joint_command_invalue_changed(self, value, ts, ep):
+        try:
+            if self._command_mode == 6:
+                self._egm.send_to_robot(value.joints)
+        except:
+            traceback.print_exc()
+
+    def _egm_pose_command_invalue_changed(self, value, ts, ep):
+        # print(f"egm_pose_command: {value.cartesian}")
+        try:
+            if self._command_mode == 6:
+                c = self._node.NamedArrayToArray(value.cartesian)[0]
+                self._egm.send_to_robot_cart(np.array(c[4:7])*1e3, c[0:4])
+        except:
+            traceback.print_exc()
+
+    def _egm_correction_command_invalue_changed(self, value, ts, ep):
+        # print(f"egm_correction_command: {value.pos}, {value.age}")
+        try:
+            if self._command_mode == 6:
+                p = self._node.NamedArrayToArray(value.pos)[0]*1e3
+                self._egm.send_to_robot_path_corr(p, value.age)
+        except:
+            traceback.print_exc()
 
 
     # Overrides for hybrid control
