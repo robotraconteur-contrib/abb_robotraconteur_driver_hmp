@@ -126,12 +126,12 @@ class JointControlReq:
             finally:
                 if self._mp_state != _rws.MotionProgramState.error:
                     self._mp_state = _rws.MotionProgramState.complete
-                with suppress(Exception):
+                with suppress(Exception, asyncio.TimeoutError):
                     mp_task.cancel()
             try:
                 if mp_task is not None:
                     await mp_task
-            except Exception:
+            except (Exception, asyncio.TimeoutError):
                 traceback.print_exc()
             self._mp_state = _rws.MotionProgramState.idle
             

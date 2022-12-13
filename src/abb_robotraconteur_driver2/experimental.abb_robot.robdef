@@ -102,7 +102,7 @@ object ABBRobot
 
     property MotionProgramRobotInfo motion_program_robot_info [readonly,nolock]
     function MotionProgramStatus{generator} execute_motion_program(MotionProgram program, bool queue)
-    function MotionProgramStatus{generator} execute_motion_program_recording(MotionProgram program, bool queue)
+    function MotionProgramStatus{generator} execute_motion_program_record(MotionProgram program, bool queue)
     function MotionProgramRecordingPart{generator} read_recording(uint32 recording_handle)
     function void clear_recordings()
 

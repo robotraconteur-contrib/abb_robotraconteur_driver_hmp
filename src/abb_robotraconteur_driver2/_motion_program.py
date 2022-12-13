@@ -10,6 +10,7 @@ from . import _rws as rws
 import asyncio
 from contextlib import suppress
 from ._motion_program_conv import rr_motion_program_to_abb
+import random
 
 class MotionExecImpl:
     def __init__(self, abb_robot_impl):
@@ -17,21 +18,24 @@ class MotionExecImpl:
         self.rws = abb_robot_impl._rws
         self.node = abb_robot_impl._node
 
-    def execute_motion_program(self, program):
+    def execute_motion_program(self, program, record = False):
 
         abb_program = rr_motion_program_to_abb(program, self.abb_robot_impl._rox_robots[0])
 
-        gen = ExecuteMotionProgramGen(self, self.rws, abb_program)
+        gen = ExecuteMotionProgramGen(self, self.rws, abb_program, record)
 
         return gen
 
     def run_timestep(self, now):
         pass
 
+    def store_recording(self, rec_handle, rec):
+        self.abb_robot_impl._motion_program_recordings[rec_handle] = rec
+
 
 class ExecuteMotionProgramGen:
 
-    def __init__(self, parent, rws, motion_program, save_log = False):
+    def __init__(self, parent, rws, motion_program, record = False):
         self._node = parent.node
         self._parent = parent
         self._rws = rws
@@ -40,7 +44,7 @@ class ExecuteMotionProgramGen:
         self._status = self._action_status_code["queued"]
         self._mp_status = self._node.GetStructureType("experimental.robotics.motion_program.MotionProgramStatus")
         self._log_handle = 0
-        self._save_log = save_log
+        self._record = record
         self._lock = threading.Lock()
         
         self._closed = False
@@ -61,7 +65,7 @@ class ExecuteMotionProgramGen:
             async def _start_mp():
                 try:
                     mp_task, mp_states = self._rws.execute_motion_program(self._motion_program, 
-                        enable_motion_logging = self._save_log)
+                        enable_motion_logging = self._record)
                     
                     with self._lock:
                         self._mp_task = mp_task
@@ -103,7 +107,10 @@ class ExecuteMotionProgramGen:
                         self._closed = True
                         self._status = self._action_status_code["complete"]
                         # TODO: store recording result
-                        raise RR.StopIterationException("")
+                        if self._record:
+                            rec_handle = random.randint(0,0xFFFFFFF)
+                            self._parent.store_recording(rec_handle, data)
+                            ret.recording_handle = rec_handle
                     elif state == rws.MotionProgramState.cancelled:
                         raise RR.OperationAbortedException("Motion program cancelled")
                     elif state == rws.MotionProgramState.error:
@@ -140,3 +147,37 @@ class ExecuteMotionProgramGen:
             with suppress(Exception):
                 self._rws.loop.call_soon_threadsafe(lambda: self._mp_task.cancel())
 
+
+class RobotRecordingGen:
+    def __init__(self, parent, robot_rec_np, ):
+        self.robot_rec_np = robot_rec_np
+        self.closed = False
+        self.aborted = False
+        self.lock = threading.Lock()
+        self._node = parent._node
+        self._mp_log_part = self._node.GetStructureType("experimental.robotics.motion_program.MotionProgramRecordingPart")
+
+    def Next(self):
+        with self.lock:
+            if self.aborted:
+                raise RR.OperationAbortedException("Log aborted")
+
+            if self.closed:
+                raise RR.StopIterationException()
+
+            ret = self._mp_log_part()
+
+            # All current paths expect to be within 10 MB limit
+            ret.time = self.robot_rec_np.data[:,0].flatten().astype(np.float64)
+            ret.command_number = self.robot_rec_np.data[:,1].flatten().astype(np.int32)
+            ret.joints = self.robot_rec_np.data[:,2:].astype(np.float64)
+            ret.column_headers = self.robot_rec_np.column_headers
+
+            self.closed = True
+            return ret
+
+    def Abort(self):
+        self.aborted = True
+
+    def Close(self):
+        self.closed = True

@@ -10,6 +10,8 @@ import time
 import RobotRaconteur as RR
 from contextlib import suppress
 import asyncio
+import json
+import re
 
 class ConnectionStatus(IntEnum):
     idle = 0
@@ -53,6 +55,8 @@ class ABBRobotRWSImpl:
 
         self._last_contact = time.perf_counter()
         self.exec_motion_program_seqno = -1
+        self.exec_motion_program_seqno_started = -1
+        self.exec_motion_program_seqno_complete = -1
         self.exec_current_cmd_num = -1
         self.exec_queued_cmd_num = -1
         self.exec_egm_active = -1
@@ -67,6 +71,10 @@ class ABBRobotRWSImpl:
         self._state_cv = asyncio.Condition()
         self._motion_program_lock = asyncio.Lock()
         self.loop = None
+
+        self._last_clean = 0
+
+        self._file_clean_re=re.compile(r"^.*\-\-\-seqno\-(\d+)\.bin$")
 
 
     def start(self):
@@ -90,22 +98,22 @@ class ABBRobotRWSImpl:
 
                 self.connection_status = ConnectionStatus.connecting
                 await self._update_state()
-                if self.exec_state:                    
-                    await self._robot_client.stop()
-                    await self._update_state()
-                    assert self.exec_state is False
+                self._ramdisk = await self._robot_client.get_ramdisk_path()
 
+                await self._robot_client.set_analog_io("motion_program_driver_abort", 1)
+                await asyncio.sleep(0.2)
+                await self._robot_client.set_analog_io("motion_program_driver_abort", 0)
+                
                 subscription_task = asyncio.create_task(self._subscription_task(self._robot_client))
                 
                 await self._update_state()
                 self.connection_status = ConnectionStatus.connected
 
                 while True:
-                    if self.egm_communication_failure:
-                        await self._do_egm_start()
                     if time.perf_counter() - self._last_contact > 1:
                         await self._update_state()
                     await asyncio.sleep(1)
+                    await self._clean_files()
             except Exception as e:
                 # self._handle_error(e)
                 traceback.print_exc()                
@@ -130,23 +138,6 @@ class ABBRobotRWSImpl:
             await asyncio.sleep(0.5)
             self.connection_status = ConnectionStatus.idle
         
-        
-    async def _do_egm_start(self):
-        if self.egm_communication_failure and not self.exec_state:
-            now = time.perf_counter()
-            if (now - self._last_egm_reset) > 1:                
-                self._last_egm_reset = time.perf_counter()
-                mp = abb_exec.MotionProgram()
-                mp.WaitTime(0.001)
-
-                #with suppress(Exception):
-                try:
-                    r = self._execute_motion_program_gen(mp, start_timeout = 0.01, enable_motion_logging=False)
-                    async for _ in r:
-                        pass
-                except:
-                    traceback.print_exc()
-
     async def _subscription_task(self, robot_client):
         while True:
             try:
@@ -163,6 +154,10 @@ class ABBRobotRWSImpl:
                     "motion_program_queued_cmd_num"),
                 rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
                     "motion_program_seqno"),
+                rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
+                    "motion_program_seqno_complete"),
+                rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
+                    "motion_program_seqno_started"),
                 rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
                     "motion_program_executing"),
                 rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
@@ -182,6 +177,10 @@ class ABBRobotRWSImpl:
                                 self.exec_state = float(data.lvalue) > 0.
                             elif data.name == "motion_program_seqno":
                                 self.exec_motion_program_seqno = int(float(data.lvalue))
+                            elif data.name == "motion_program_seqno_started":
+                                self.exec_motion_program_seqno_started = int(float(data.lvalue))
+                            elif data.name == "motion_program_seqno_complete":
+                                self.exec_motion_program_seqno_complete = int(float(data.lvalue))
                             elif data.name == "motion_program_current_cmd_num":
                                 self.exec_current_cmd_num = int(float(data.lvalue))
                             elif data.name == "motion_program_queued_cmd_num":
@@ -207,9 +206,31 @@ class ABBRobotRWSImpl:
             self.exec_error = int(await self._robot_client.get_digital_io("motion_program_error")) > 0
             self.exec_current_cmd_num = int(await self._robot_client.get_analog_io("motion_program_current_cmd_num"))
             self.exec_queued_cmd_num = int(await self._robot_client.get_analog_io("motion_program_queued_cmd_num"))
+            self.exec_motion_program_seqno_complete = int(await self._robot_client.get_analog_io("motion_program_seqno_complete"))
+            self.exec_motion_program_seqno_started = int(await self._robot_client.get_analog_io("motion_program_seqno_started"))
             self.exec_egm_active = int(await self._robot_client.get_analog_io("motion_program_egm_active"))
             self._last_contact = time.perf_counter()
 
+
+    async def _clean_files(self):
+        now = time.perf_counter()
+        if now - self._last_clean < 10:
+            return
+        self._last_clean = now        
+        
+        try:
+            del_files = []
+            files = await self._robot_client.list_files(self._ramdisk)
+            for f in files:
+                f_match = self._file_clean_re.match(f)
+                if f_match is not None:
+                    f_seqno = int(f_match.group(1))
+                    if f_seqno < self._mp_seqno_i - 5:
+                        del_files.append(f)
+            for f2 in del_files:
+                await self._robot_client.delete_file(f"{self._ramdisk}/{f2}")
+        except:
+            traceback.print_exc()
 
     def _convert_opmode(self, abb_opmode):
         if abb_opmode == "MANR":
@@ -275,15 +296,20 @@ class ABBRobotRWSImpl:
 
         egm_stop = isinstance(motion_program._commands[-1], abb_exec.egm_commands.EGMRunJointCommand) \
                 or isinstance(motion_program._commands[-1], abb_exec.egm_commands.EGMRunPoseCommand)
-        self._mp_seqno_i += 1
-        seqno = self._mp_seqno_i
 
         self.motion_program_state == MotionProgramState.starting
 
-
+        seqno = -1
         await asyncio.wait_for(self._motion_program_lock.acquire(), timeout = start_timeout)
-        
+        filename = None
         try:
+
+            self._mp_seqno_i += 1
+            seqno_started = await self._robot_client.get_analog_io("motion_program_seqno_started")
+            if seqno_started >= self._mp_seqno_i:
+                self._mp_seqno_i = seqno_started + 1
+            seqno = self._mp_seqno_i
+        
             async with self._state_cv:
                 await asyncio.wait_for(self._state_cv.wait_for(lambda: self.connection_status == ConnectionStatus.connected),0.1)
                 assert self.connection_status == ConnectionStatus.connected, "Not connected to robot"
@@ -294,9 +320,21 @@ class ABBRobotRWSImpl:
             else:
                 await self._robot_mp_client.disable_motion_logging()
 
-            log_seqnum = await self._robot_mp_client.execute_motion_program(motion_program, 
-                        wait = False, seqno = seqno)
+            #log_seqnum = await self._robot_mp_client.execute_motion_program(motion_program, 
+            #            wait = False, seqno = seqno)
             
+            b = motion_program.get_program_bytes(seqno)
+            assert len(b) > 0, "Motion program must not be empty"
+
+            
+            filename = f"{self._ramdisk}/motion_program---seqno-{seqno}.bin"
+            await self._robot_client.upload_file(filename, b)
+
+            assert self.exec_state and self.exec_motion_program_seqno == -1
+
+            await self._robot_client.set_analog_io("motion_program_driver_abort", 0)
+            await self._robot_client.set_analog_io("motion_program_seqno_command", seqno)
+
             await self._update_state()
             self.motion_program_state = running_state
             yield (running_state, (-1,-1))
@@ -309,9 +347,10 @@ class ABBRobotRWSImpl:
                 while True:
                     with suppress(asyncio.TimeoutError):
                         async with self._state_cv:
-                            if not self.exec_state:
+                            if not self.exec_state or self.exec_motion_program_seqno_complete >= seqno:
                                 break
                             await asyncio.wait_for(self._state_cv.wait_for(lambda: not self.exec_state or \
+                                self.exec_motion_program_seqno_complete >= seqno or \
                                 self.exec_current_cmd_num > sent_cmd_num or \
                                 self.exec_queued_cmd_num > sent_queued_num),1)
                     cur_cmd_num = self.exec_current_cmd_num
@@ -324,12 +363,32 @@ class ABBRobotRWSImpl:
                         last_update = time.perf_counter()
                         yield (running_state, (sent_cmd_num, sent_queued_num))
                 
-                if enable_motion_logging:            
-                    res = await self._robot_mp_client.read_motion_program_result_log(log_seqnum)
-                else:
-                    res = None
-                    if float(await self._robot_client.get_digital_io("motion_program_error")) > 0.:
-                        raise Exception("ABB motion execution failed")
+                
+                res = None
+                if float(await self._robot_client.get_digital_io("motion_program_error")) > 0.:
+                    await asyncio.sleep(0.25)
+                    err = Exception("ABB motion execution failed")
+                    err_fname = f"{self._ramdisk}/motion_program_err---seqno-{seqno}.json"
+                    try:
+                        err_json_txt = await self._robot_client.read_file(err_fname)
+                        err_json = json.loads(err_json_txt)
+                        err_code = int(err_json["error_domain"]*10000+err_json['error_number'])
+                        err = Exception(f"ABB motion execution failed with error code {err_code} " \
+                            f"with message \"{err_json['error_title']}\"")
+                        
+                    except Exception:
+                        traceback.print_exc()
+                    finally:
+                        with suppress(Exception):
+                            await self._robot_client.delete_file(err_fname)
+                    raise err
+
+                if enable_motion_logging:
+                    recording_fname = f"{self._ramdisk}/log-motion_program---seqno-{seqno}.bin"
+                    recording_bin = await self._robot_client.read_file(recording_fname)
+                    with suppress(Exception):
+                        await self._robot_client.delete_file(recording_fname)
+                    res = abb_exec.abb_motion_program_exec_client._unpack_motion_program_result_log(recording_bin)
 
                 yield MotionProgramState.complete, res
             except asyncio.CancelledError:
@@ -340,16 +399,21 @@ class ABBRobotRWSImpl:
                     await self._robot_mp_client.stop_egm()
                 else:
                     self.motion_program_state = MotionProgramState.stopping
-                    await self._robot_mp_client.stop_motion_program()
+                    await self._robot_client.set_analog_io("motion_program_seqno_command", -1)
+                    await self._robot_client.set_analog_io("motion_program_driver_abort", 1)
                 yield (MotionProgramState.cancelled, None)
         
         finally:
-            try:
+            try:                
                 with suppress(asyncio.TimeoutError):
                     async with self._state_cv:
-                        await asyncio.wait_for(self._state_cv.wait_for(lambda: self.exec_motion_program_seqno != seqno \
+                        await asyncio.wait_for(self._state_cv.wait_for(lambda: self.exec_motion_program_seqno == -1 \
                             or not self.exec_state),1)
                 
+                if filename is not None:
+                    with suppress(Exception):
+                        await self._robot_client.delete_file(filename)
+
                 #assert self.exec_motion_program_seqno != seqno or not self.exec_state, "Error ending motion program"
             finally:
                 self.motion_program_state = MotionProgramState.idle
@@ -386,18 +450,14 @@ class ABBRobotRWSImpl:
                 except asyncio.TimeoutError:
                     return
 
-            mp = abb_exec.MotionProgram()
-            mp.WaitTime(0.001)
+                await self._robot_client.resetpp()
+                await self._robot_client.set_analog_io("motion_program_seqno_command", -1)
+                await self._robot_client.set_analog_io("motion_program_seqno", -1)
+                await self._robot_client.start(cycle="forever")
 
-            #with suppress(Exception):
-            try:
-                r = self._execute_motion_program_gen(mp, start_timeout = 0.01, enable_motion_logging=False)
-                async for _ in r:
-                    pass
-            except:
-                traceback.print_exc()
         fut = asyncio.run_coroutine_threadsafe(_reset_errors_task(), self.loop)
         fut.result()
+
 
     def send_stop_all(self):
         self._user_robot_client.stop()

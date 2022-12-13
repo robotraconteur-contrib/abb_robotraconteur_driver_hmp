@@ -131,7 +131,7 @@ class MoveCCommandConv:
     def apply_rr_command(self, cmd, mp, cfx_robot, **kwargs):
         zd = rr_zone_to_abb(cmd_get_arg(cmd,"fine_point"),cmd_get_arg(cmd,"blend_radius"))
         sd = rr_speed_to_abb(cmd_get_arg(cmd,"tcp_velocity"))
-        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"))
+        rt = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_pose"), cfx_robot)
         rt2 = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_via_pose"), cfx_robot)
         mp.MoveC(rt2, rt,  sd, zd)
 

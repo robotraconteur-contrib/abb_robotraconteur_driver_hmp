@@ -20,7 +20,7 @@ import time
 from . import _rws as rws
 from ._joint_control_req import JointControlReq
 from contextlib import suppress
-from ._motion_program import MotionExecImpl
+from ._motion_program import MotionExecImpl, RobotRecordingGen
 from aioconsole import ainput
 import asyncio
 
@@ -44,6 +44,8 @@ class ABBRobotImpl(AbstractRobot):
         self._joint_control_req = None
         self._joint_control_req_last_attempt = 0
         self._motion_exec_impl = MotionExecImpl(self)
+
+        self._motion_program_recordings = dict()
 
     def RRServiceObjectInit(self, context, service_path):
         super().RRServiceObjectInit(context, service_path)
@@ -145,10 +147,6 @@ class ABBRobotImpl(AbstractRobot):
                 self._egm.send_to_robot(np.rad2deg(self._position_command))
 
     def _verify_communication(self, now):
-        if self._command_mode == 6:
-            if self._rws.connection_status == rws.ConnectionStatus.connected:
-                self._communication_failure = False
-                return True
 
         res = super()._verify_communication(now)
         if self._rws.connection_status != rws.ConnectionStatus.connected:
@@ -168,6 +166,12 @@ class ABBRobotImpl(AbstractRobot):
         assert self._command_mode == 6, "Invalid mode for motion program"
 
         return self._motion_exec_impl.execute_motion_program(program)
+
+    def execute_motion_program_record(self, program, queue):
+        assert not queue, "Queuing motion programs not supported"
+        assert self._command_mode == 6, "Invalid mode for motion program"
+
+        return self._motion_exec_impl.execute_motion_program(program, True)
 
     def _egm_joint_command_invalue_changed(self, value, ts, ep):
         try:
@@ -218,12 +222,13 @@ class ABBRobotImpl(AbstractRobot):
                 self._lock.release()
         AbstractRobot.command_mode.fset(self, value)
 
-    def _verify_robot_state(self, now):
-        if self._command_mode == 6 and self._enabled and not self._error and \
-            self._rws.connection_status == rws.ConnectionStatus.connected:
-            return True
+    def read_recording(self, recording_handle):
+        robot_rec_np = self._motion_program_recordings.pop(recording_handle)
+        return RobotRecordingGen(self, robot_rec_np)
 
-        return super()._verify_robot_state(now)
+    def clear_recordings(self):
+        self._motion_program_recordings.clear()
+
 
 async def amain():
 
