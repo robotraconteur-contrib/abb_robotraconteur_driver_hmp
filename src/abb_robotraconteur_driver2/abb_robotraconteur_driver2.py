@@ -266,6 +266,12 @@ class ABBRobotImpl(AbstractRobot):
         mp_state = self._fill_mp_state(now, rr_advanced_robot_state)
         self.motion_program_robot_state.OutValue = mp_state
 
+    def enable_motion_program_mode(self):
+        self.command_mode = 6
+
+    def disable_motion_program_mode(self):
+        self.command_mode = 0
+
 async def amain():
 
     parser = argparse.ArgumentParser(description="ABB robot driver service for Robot Raconteur")

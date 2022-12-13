@@ -182,6 +182,8 @@ object MotionProgramRobot
     function MotionProgramStatus{generator} execute_motion_program_record(MotionProgram program, bool queue)
     function MotionProgramRecordingPart{generator} read_recording(uint32 recording_handle)
     wire MotionProgramRobotState motion_program_robot_state [readonly,nolock]
+    function void enable_motion_program_mode()
+    function void disable_motion_program_mode()
     function void clear_recordings()
     function varvalue getf_param(string param_name)
     function void setf_param(string param_name, varvalue value)

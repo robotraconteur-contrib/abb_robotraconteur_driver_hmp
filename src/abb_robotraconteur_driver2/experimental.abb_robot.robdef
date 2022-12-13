@@ -112,4 +112,6 @@ object ABBRobot
     wire EGMPathCorrection egm_path_correction_command [writeonly]
 
     wire MotionProgramRobotState motion_program_robot_state [readonly,nolock]
+    function void enable_motion_program_mode()
+    function void disable_motion_program_mode()
 end object
