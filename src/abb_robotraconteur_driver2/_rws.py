@@ -59,6 +59,7 @@ class ABBRobotRWSImpl:
         self.exec_motion_program_seqno_complete = -1
         self.exec_current_cmd_num = -1
         self.exec_queued_cmd_num = -1
+        self.exec_current_preempt_num = -1
         self.exec_egm_active = -1
 
         self.egm_communication_failure = False
@@ -153,6 +154,8 @@ class ABBRobotRWSImpl:
                 rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
                     "motion_program_queued_cmd_num"),
                 rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
+                    "motion_program_preempt_current"),
+                rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
                     "motion_program_seqno"),
                 rws.SubscriptionResourceRequest(rws.SubscriptionResourceType.Signal, rws.SubscriptionResourcePriority.High, 
                     "motion_program_seqno_complete"),
@@ -185,6 +188,8 @@ class ABBRobotRWSImpl:
                                 self.exec_current_cmd_num = int(float(data.lvalue))
                             elif data.name == "motion_program_queued_cmd_num":
                                 self.exec_queued_cmd_num = int(float(data.lvalue))
+                            elif data.name == "motion_program_preempt_current":
+                                self.exec_current_preempt_num = int(float(data.lvalue))
                             elif data.name == "motion_program_egm_active":
                                 self.exec_egm_active = float(data.lvalue) > 0.
                             elif data.name == "motion_program_error":
@@ -206,6 +211,7 @@ class ABBRobotRWSImpl:
             self.exec_error = int(await self._robot_client.get_digital_io("motion_program_error")) > 0
             self.exec_current_cmd_num = int(await self._robot_client.get_analog_io("motion_program_current_cmd_num"))
             self.exec_queued_cmd_num = int(await self._robot_client.get_analog_io("motion_program_queued_cmd_num"))
+            self.exec_current_preempt_num = int(await self._robot_client.get_analog_io("motion_program_preempt_current"))
             self.exec_motion_program_seqno_complete = int(await self._robot_client.get_analog_io("motion_program_seqno_complete"))
             self.exec_motion_program_seqno_started = int(await self._robot_client.get_analog_io("motion_program_seqno_started"))
             self.exec_egm_active = int(await self._robot_client.get_analog_io("motion_program_egm_active"))
@@ -337,11 +343,13 @@ class ABBRobotRWSImpl:
 
             await self._update_state()
             self.motion_program_state = running_state
-            yield (running_state, (-1,-1))
+            yield (running_state, (-1,-1,-1))
             cur_cmd_num = -1
             cur_queued_num = -1
+            cur_preempt_num = -1
             sent_cmd_num = -1
             sent_queued_num = -1
+            sent_preempt_num = -1
             try:
                 last_update = time.perf_counter()
                 while True:
@@ -352,16 +360,19 @@ class ABBRobotRWSImpl:
                             await asyncio.wait_for(self._state_cv.wait_for(lambda: not self.exec_state or \
                                 self.exec_motion_program_seqno_complete >= seqno or \
                                 self.exec_current_cmd_num > sent_cmd_num or \
-                                self.exec_queued_cmd_num > sent_queued_num),1)
+                                self.exec_queued_cmd_num > sent_queued_num or \
+                                self.exec_current_preempt_num > sent_preempt_num),1)
                     cur_cmd_num = self.exec_current_cmd_num
                     cur_queued_num = self.exec_queued_cmd_num
+                    cur_preempt_num = self.exec_current_preempt_num
                     
-                    if (cur_cmd_num > sent_cmd_num) or (cur_queued_num > sent_queued_num) \
-                        or time.perf_counter() - last_update > 2.5:
+                    if (cur_cmd_num > sent_cmd_num) or (cur_queued_num > sent_queued_num) or \
+                        (cur_preempt_num > sent_preempt_num) or time.perf_counter() - last_update > 2.5:
                         sent_cmd_num = cur_cmd_num
                         sent_queued_num = cur_queued_num
+                        sent_preempt_num = cur_preempt_num
                         last_update = time.perf_counter()
-                        yield (running_state, (sent_cmd_num, sent_queued_num))
+                        yield (running_state, (sent_cmd_num, sent_queued_num, sent_preempt_num))
                 
                 
                 res = None
@@ -434,6 +445,19 @@ class ABBRobotRWSImpl:
         return self.execute_motion_program(mp, start_timeout = start_timeout,
             running_state = MotionProgramState.running_egm_joint_control, 
             enable_motion_logging = enable_motion_logging)
+
+    async def preempt_motion_program(self, motion_program, preempt_number, preempt_cmdnum):
+        seqno = await self._robot_client.get_analog_io("motion_program_seqno")
+        assert seqno > 0, "Motion program not running"
+        b = motion_program.get_program_bytes(seqno)
+        assert len(b) > 0, "Motion program must not be empty"
+
+        
+        filename = f"{self._ramdisk}/motion_program_p{preempt_number}---seqno-{seqno}.bin"
+        await self._robot_client.upload_file(filename, b)
+
+        await self._robot_client.set_analog_io("motion_program_preempt_cmd_num", preempt_cmdnum)
+        await self._robot_client.set_analog_io("motion_program_preempt", preempt_number)
 
     def send_enable(self):
         if not self.exec_state:

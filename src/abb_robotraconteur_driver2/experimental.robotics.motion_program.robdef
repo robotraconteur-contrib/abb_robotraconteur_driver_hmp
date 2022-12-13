@@ -153,6 +153,7 @@ struct MotionProgramStatus
     field ActionStatusCode action_status
     field int32 current_command
     field int32 queued_command
+    field int32 current_preempt
     field uint32 recording_handle
 end
 
@@ -163,7 +164,8 @@ struct MotionProgramRobotState
     field RobotControllerState controller_state
     field uint64 motion_program_robot_state_flags
     field int32 current_command
-    field int32 queued_command    
+    field int32 queued_command
+    field int32 current_preempt
 end
 
 struct MotionProgramRecordingPart
@@ -180,6 +182,7 @@ object MotionProgramRobot
     property MotionProgramRobotInfo motion_program_robot_info [readonly,nolock]
     function MotionProgramStatus{generator} execute_motion_program(MotionProgram program, bool queue)
     function MotionProgramStatus{generator} execute_motion_program_record(MotionProgram program, bool queue)
+    function void preempt_motion_program(MotionProgram program, uint32 preempt_number, uint32 preempt_cmdnum)
     function MotionProgramRecordingPart{generator} read_recording(uint32 recording_handle)
     wire MotionProgramRobotState motion_program_robot_state [readonly,nolock]
     function void enable_motion_program_mode()

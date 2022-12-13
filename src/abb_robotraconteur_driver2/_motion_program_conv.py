@@ -402,9 +402,13 @@ def rr_motion_program_to_abb(rr_mp, robot):
     cfx_robot = rox.Robot(robot.H, P_cfx_w, robot.joint_type)
 
     setup_args = dict()
-    for setup_cmd in rr_mp.motion_setup_commands:
-        #with suppress(OptionalCommandException):
-            add_rr_motion_setup_args(setup_cmd, setup_args)
+    if rr_mp.motion_setup_commands is not None:
+        for setup_cmd in rr_mp.motion_setup_commands:
+            #with suppress(OptionalCommandException):
+                add_rr_motion_setup_args(setup_cmd, setup_args)
+    if rr_mp.extended is not None:
+        first_cmd_num_rr = rr_mp.extended.get("first_command_number")
+        setup_args["first_cmd_num"] = int(first_cmd_num_rr.data)
     mp = abb_exec.MotionProgram(**setup_args)
     for cmd in rr_mp.motion_program_commands:
         #with suppress(OptionalCommandException):

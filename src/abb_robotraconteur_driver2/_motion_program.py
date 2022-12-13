@@ -26,6 +26,16 @@ class MotionExecImpl:
 
         return gen
 
+    def preempt_motion_program(self, program, preempt_number, preempt_cmdnum):
+        abb_program = rr_motion_program_to_abb(program, self.abb_robot_impl._rox_robots[0])
+
+        async def _do_preempt():
+            await self.rws.preempt_motion_program(abb_program, preempt_number, preempt_cmdnum)
+        
+        fut = asyncio.run_coroutine_threadsafe(_do_preempt(), self.rws.loop)
+        fut.result()
+
+
     def run_timestep(self, now):
         pass
 
@@ -95,11 +105,12 @@ class ExecuteMotionProgramGen:
                 ret = self._mp_status()
                 ret.current_command = -1
                 ret.queued_command = -1
+                ret.current_preempt = -1
                 try:
                     state, data = await self._mp_states.get()
                     if state in (rws.MotionProgramState.running, rws.MotionProgramState.running_egm_joint_control,
                         rws.MotionProgramState.running_egm_path_corr, rws.MotionProgramState.running_egm_pose_control):
-                        ret.current_command, ret.queued_command = data
+                        ret.current_command, ret.queued_command, ret.current_preempt = data
                     elif state in (rws.MotionProgramState.starting, rws.MotionProgramState.stopping, 
                         rws.MotionProgramState.stop_requested, rws.MotionProgramState.stopping_egm):
                         pass

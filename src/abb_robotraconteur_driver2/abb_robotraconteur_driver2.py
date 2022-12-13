@@ -181,6 +181,11 @@ class ABBRobotImpl(AbstractRobot):
 
         return self._motion_exec_impl.execute_motion_program(program, True)
 
+    def preempt_motion_program(self, program, preempt_number, preempt_cmdnum):
+        assert self._command_mode == 6, "Invalid mode for motion program"
+
+        return self._motion_exec_impl.preempt_motion_program(program, preempt_number, preempt_cmdnum)
+
     def _egm_joint_command_invalue_changed(self, value, ts, ep):
         try:
             if self._command_mode == 6:
@@ -257,6 +262,7 @@ class ABBRobotImpl(AbstractRobot):
         mp_state.motion_program_robot_state_flags = rr_advanced_robot_state.robot_state_flags
         mp_state.current_command = self._rws.exec_current_cmd_num
         mp_state.queued_command = self._rws.exec_queued_cmd_num
+        mp_state.current_preempt = self._rws.exec_current_preempt_num
         return mp_state
 
     def _send_states(self, now, rr_robot_state, rr_advanced_robot_state, rr_state_sensor_data):
