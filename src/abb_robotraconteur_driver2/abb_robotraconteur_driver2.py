@@ -47,12 +47,20 @@ class ABBRobotImpl(AbstractRobot):
 
         self._motion_program_recordings = dict()
 
+        self._motion_program_consts = self._node.GetConstants("experimental.robotics.motion_program")
+        self._motion_program_flags = self._motion_program_consts["MotionProgramRobotStateFlags"]
+
+        self._motion_program_robot_state_type = self._node.GetStructureType(
+            "experimental.robotics.motion_program.MotionProgramRobotState")
+
     def RRServiceObjectInit(self, context, service_path):
         super().RRServiceObjectInit(context, service_path)
 
         self.egm_joint_command.InValueChanged += self._egm_joint_command_invalue_changed
         self.egm_pose_command.InValueChanged += self._egm_pose_command_invalue_changed
         self.egm_path_correction_command.InValueChanged += self._egm_correction_command_invalue_changed
+
+        self._broadcast_downsampler.AddWireBroadcaster(self.motion_program_robot_state)
 
     def _start_robot(self):
         self._egm = EGM()
@@ -229,6 +237,34 @@ class ABBRobotImpl(AbstractRobot):
     def clear_recordings(self):
         self._motion_program_recordings.clear()
 
+    def _fill_state_flags(self, now):
+        flags = super()._fill_state_flags(now)
+        if self._command_mode == 6:
+            flags |= self._motion_program_flags["motion_program_mode_enabled"]
+        if self._rws.motion_program_state in (rws.MotionProgramState.running, 
+            rws.MotionProgramState.running_egm_joint_control,
+            rws.MotionProgramState.running_egm_pose_control,
+            rws.MotionProgramState.running_egm_path_corr):
+            flags |= self._motion_program_flags["motion_program_running"]
+        return flags
+
+    def _fill_mp_state(self, now, rr_advanced_robot_state):
+        mp_state = self._motion_program_robot_state_type()
+        mp_state.ts = rr_advanced_robot_state.ts
+        mp_state.seqno = rr_advanced_robot_state.seqno
+        mp_state.operational_mode = rr_advanced_robot_state.operational_mode
+        mp_state.controller_state = rr_advanced_robot_state.controller_state
+        mp_state.motion_program_robot_state_flags = rr_advanced_robot_state.robot_state_flags
+        mp_state.current_command = self._rws.exec_current_cmd_num
+        mp_state.queued_command = self._rws.exec_queued_cmd_num
+        return mp_state
+
+    def _send_states(self, now, rr_robot_state, rr_advanced_robot_state, rr_state_sensor_data):
+        
+        super()._send_states(now, rr_robot_state, rr_advanced_robot_state, rr_state_sensor_data)
+
+        mp_state = self._fill_mp_state(now, rr_advanced_robot_state)
+        self.motion_program_robot_state.OutValue = mp_state
 
 async def amain():
 

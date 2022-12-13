@@ -42,6 +42,7 @@ using experimental.robotics.motion_program.MotionProgramRobotInfo
 using experimental.robotics.motion_program.MotionProgram
 using experimental.robotics.motion_program.MotionProgramStatus
 using experimental.robotics.motion_program.MotionProgramRecordingPart
+using experimental.robotics.motion_program.MotionProgramRobotState
 using experimental.abb_robot.motion_program.EGMJointTarget
 using experimental.abb_robot.motion_program.EGMPoseTarget
 using experimental.abb_robot.motion_program.EGMPathCorrection
@@ -109,4 +110,6 @@ object ABBRobot
     wire EGMJointTarget egm_joint_command [writeonly]
     wire EGMPoseTarget egm_pose_command [writeonly]
     wire EGMPathCorrection egm_path_correction_command [writeonly]
+
+    wire MotionProgramRobotState motion_program_robot_state [readonly,nolock]
 end object
