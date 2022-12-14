@@ -30,7 +30,8 @@ enum MotionProgramRobotCapabilities
     queued_command_feedback = 0x04,
     motion_recording = 0x08,
     motion_program_preemption = 0x10,
-    motion_program_mode_select = 0x20
+    motion_program_mode_select = 0x20,
+    preempt_number_feedback = 0x40
 end
 
 enum MotionProgramRobotStateFlags
@@ -136,8 +137,9 @@ end
 
 struct MotionProgramCommandInfo
     field string command_name
-    field string{list} freeform_command_names
     field string{list} command_struct_types
+    field string{list} freeform_command_names
+    field string description
     field varvalue{string} extended
 end
 

@@ -53,6 +53,8 @@ class ABBRobotImpl(AbstractRobot):
         self._motion_program_robot_state_type = self._node.GetStructureType(
             "experimental.robotics.motion_program.MotionProgramRobotState")
 
+        self.motion_program_robot_info = self._motion_exec_impl.get_motion_program_robot_info(self.robot_info)
+
     def RRServiceObjectInit(self, context, service_path):
         super().RRServiceObjectInit(context, service_path)
 

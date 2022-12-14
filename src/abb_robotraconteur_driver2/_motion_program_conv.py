@@ -336,7 +336,7 @@ class EGMMoveCCommandConv:
 _command_convs = dict()
 _freeform_command_convs = dict()
 
-_conv_types = [
+conv_types = [
     MoveAbsJCommandConv,
     MoveJCommandConv,
     MoveLCommandConv,
@@ -358,7 +358,7 @@ _conv_types = [
 ]
 
 def _init_convs():
-    for c in _conv_types:
+    for c in conv_types:
         c_inst = c()
         for x in c_inst.rr_types:
             _command_convs[x] = c_inst

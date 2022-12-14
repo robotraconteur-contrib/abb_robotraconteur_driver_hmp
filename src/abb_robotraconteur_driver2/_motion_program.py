@@ -9,14 +9,21 @@ import time
 from . import _rws as rws
 import asyncio
 from contextlib import suppress
-from ._motion_program_conv import rr_motion_program_to_abb
+from ._motion_program_conv import rr_motion_program_to_abb, conv_types
 import random
+import functools
 
 class MotionExecImpl:
     def __init__(self, abb_robot_impl):
         self.abb_robot_impl = abb_robot_impl
         self.rws = abb_robot_impl._rws
         self.node = abb_robot_impl._node
+        self._motion_program_command_info_type = \
+            self.node.GetStructureType("experimental.robotics.motion_program.MotionProgramCommandInfo")
+        self._motion_program_robot_info_type = \
+            self.node.GetStructureType("experimental.robotics.motion_program.MotionProgramRobotInfo")
+        self._mp_consts = self.node.GetConstants("experimental.robotics.motion_program")
+        self._mp_robot_caps_flags = self._mp_consts["MotionProgramRobotCapabilities"]
 
     def execute_motion_program(self, program, record = False):
 
@@ -42,6 +49,32 @@ class MotionExecImpl:
     def store_recording(self, rec_handle, rec):
         self.abb_robot_impl._motion_program_recordings[rec_handle] = rec
 
+    def get_motion_program_robot_info(self, robot_info):
+        cap_flags = ["current_command_feedback", "queued_command_feedback", "motion_recording", 
+            "motion_program_preemption", "motion_program_mode_select", "preempt_number_feedback"]
+        mp_caps = functools.reduce(lambda a,b: a|self._mp_robot_caps_flags[b],cap_flags,0)
+
+        setup_commands = []
+        motion_commands = []
+        for c in conv_types:
+            rr_c = self._motion_program_command_info_type()
+            rr_c.command_name = c.freeform_names[0]
+            rr_c.freeform_command_names = c.freeform_names
+            rr_c.command_struct_types = c.rr_types
+            rr_c.description = ""
+
+            if hasattr(c,"add_setup_args"):
+                setup_commands.append(rr_c)
+            else:
+                motion_commands.append(rr_c)
+
+        ret = self._motion_program_robot_info_type()
+        ret.robot_info = robot_info
+        ret.supported_setup_commands = setup_commands
+        ret.supported_motion_commands = motion_commands
+        ret.motion_program_robot_capabilities = mp_caps
+
+        return ret
 
 class ExecuteMotionProgramGen:
 
