@@ -477,6 +477,8 @@ class ABBRobotRWSImpl:
                 await self._robot_client.resetpp()
                 await self._robot_client.set_analog_io("motion_program_seqno_command", -1)
                 await self._robot_client.set_analog_io("motion_program_seqno", -1)
+                ctrl_state = await self._robot_client.get_controller_state()
+                assert ctrl_state == "motoron", "Controller motors not enabled"
                 await self._robot_client.start(cycle="forever")
 
         fut = asyncio.run_coroutine_threadsafe(_reset_errors_task(), self.loop)
