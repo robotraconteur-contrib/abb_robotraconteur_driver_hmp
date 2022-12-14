@@ -12,6 +12,7 @@ from contextlib import suppress
 import asyncio
 import json
 import re
+from . import _motion_program_conv
 
 class ConnectionStatus(IntEnum):
     idle = 0
@@ -430,7 +431,8 @@ class ABBRobotRWSImpl:
                 self.motion_program_state = MotionProgramState.idle
                 self._motion_program_lock.release()
 
-    def start_joint_control(self, *, start_timeout = 0.05, enable_motion_logging = True):
+    def start_joint_control(self, *, start_timeout = 0.05, enable_motion_logging = True, tool=None, payload=None,
+        payload_pose=None):
         
         mm = abb_exec.egm_minmax(-1e-3,1e-3)
 
@@ -438,8 +440,17 @@ class ABBRobotRWSImpl:
             mm, mm, mm, mm, mm ,mm, 1000, 1000
         )
 
+        mp_tool = None
+        mp_payload = None
+
+        if tool is not None:
+            mp_tool = _motion_program_conv.rr_tool_to_abb(tool)
+
+        if payload is not None:
+            mp_payload = _motion_program_conv.rr_payload_to_abb(payload, payload_pose)
+
         # TODO: tool, payload, wobj
-        mp = abb_exec.MotionProgram(egm_config = egm_config)
+        mp = abb_exec.MotionProgram(egm_config = egm_config, tool=mp_tool, gripload=mp_payload)
         mp.EGMRunJoint(1e9, 0.005, 0.005)
 
         return self.execute_motion_program(mp, start_timeout = start_timeout,

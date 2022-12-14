@@ -389,11 +389,8 @@ def apply_rr_motion_command_to_mp(cmd, mp, **kwargs):
     conv = get_command_conv(cmd)
     conv.apply_rr_command(cmd, mp, **kwargs)
 
-def add_rr_motion_setup_args(cmd, setup_args):
-    conv = get_command_conv(cmd)
-    conv.add_setup_args(cmd, setup_args)
 
-def rr_motion_program_to_abb(rr_mp, robot):
+def rr_motion_program_to_abb(rr_mp, robot, rr_current_tool, rr_current_payload, rr_current_payload_pose):
 
     # Robot structure for computing confdata.cfx from joint seed
     P_cfx_w = np.copy(robot.P)
@@ -401,11 +398,27 @@ def rr_motion_program_to_abb(rr_mp, robot):
     P_cfx_w[:,5:7] = 0.0    
     cfx_robot = rox.Robot(robot.H, P_cfx_w, robot.joint_type)
 
+    tool = rr_current_tool
+    payload = rr_current_payload
+    payload_pose = rr_current_payload_pose
+
     setup_args = dict()
     if rr_mp.motion_setup_commands is not None:
         for setup_cmd in rr_mp.motion_setup_commands:
             #with suppress(OptionalCommandException):
-                add_rr_motion_setup_args(setup_cmd, setup_args)
+                conv = get_command_conv(setup_cmd)
+                conv.add_setup_args(setup_cmd, setup_args)
+                if isinstance(conv,SetToolCommandConv):
+                    tool = cmd_get_arg(setup_cmd,"tool_info")
+                if isinstance(conv,SetPayloadCommandConv):
+                    payload = cmd_get_arg(setup_cmd,"payload_info")
+                    payload_pose = cmd_get_arg(setup_cmd,"payload_pose")
+                
+    if "tool" not in setup_args and rr_current_tool is not None:
+        setup_args["tool"] = rr_tool_to_abb(rr_current_tool)
+    if "gripload" not in setup_args and rr_current_payload is not None:
+        setup_args["gripload"] = rr_payload_to_abb(rr_current_payload, rr_current_payload_pose)
+
     if rr_mp.extended is not None:
         first_cmd_num_rr = rr_mp.extended.get("first_command_number")
         setup_args["first_cmd_num"] = int(first_cmd_num_rr.data)
@@ -414,4 +427,4 @@ def rr_motion_program_to_abb(rr_mp, robot):
         #with suppress(OptionalCommandException):
             apply_rr_motion_command_to_mp(cmd, mp, robot=robot, cfx_robot=cfx_robot)
         
-    return mp
+    return mp, tool, payload, payload_pose

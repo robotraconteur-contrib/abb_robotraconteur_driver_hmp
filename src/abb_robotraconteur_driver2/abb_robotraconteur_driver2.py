@@ -67,7 +67,7 @@ class ABBRobotImpl(AbstractRobot):
     def _start_robot(self):
         self._egm = EGM()
         self._rws.start()
-        self._joint_control_req = JointControlReq(self._rws)
+        self._joint_control_req = JointControlReq(self, self._rws)
         self._joint_control_req.start()
         self._missed_egm = 10000
         super()._start_robot()
@@ -121,7 +121,7 @@ class ABBRobotImpl(AbstractRobot):
         
             self._joint_position = np.deg2rad(robot_state.joint_angles)            
             self._endpoint_pose = self._node.ArrayToNamedArray(\
-                np.concatenate((robot_state.cartesian[1],robot_state.cartesian[0])), self._pose_dtype)
+                np.concatenate((robot_state.cartesian[1],robot_state.cartesian[0]*1e-3)), self._pose_dtype)
             
         else:
             if self._communication_failure:
@@ -279,6 +279,32 @@ class ABBRobotImpl(AbstractRobot):
 
     def disable_motion_program_mode(self):
         self.command_mode = 0
+
+    def tool_attached(self, chain, tool):
+        assert not (self._command_mode in (2,3,4)), "Tool cannot be changed in current mode"
+        super().tool_attached(chain, tool)
+        self._joint_control_req.request_reload()
+    
+    def tool_detached(self, chain, tool_name):
+        assert not (self._command_mode in (2,3,4)), "Tool cannot be changed in current mode"
+        super().tool_detached(chain, tool_name)
+        self._joint_control_req.request_reload()
+
+    def payload_attached(self, chain, payload, payload_pose):
+        assert not (self._command_mode in (2,3,4)), "Payload cannot be changed in current mode"
+        super().payload_attached(chain, payload, payload_pose)
+        self._joint_control_req.request_reload()
+
+    def payload_detached(self, chain, payload_name):
+        assert not (self._command_mode in (2,3,4)), "Payload cannot be changed in current mode"
+        super().payload_detached(chain, payload_name)
+        self._joint_control_req.request_reload()
+
+    def _calc_endpoint_pose(self, chain):
+        return self._endpoint_pose[chain]
+
+    def _calc_endpoint_vel(self, chain):
+        return self._endpoint_vel[chain]
 
 async def amain():
 

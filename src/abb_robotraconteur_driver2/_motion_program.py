@@ -24,23 +24,39 @@ class MotionExecImpl:
             self.node.GetStructureType("experimental.robotics.motion_program.MotionProgramRobotInfo")
         self._mp_consts = self.node.GetConstants("experimental.robotics.motion_program")
         self._mp_robot_caps_flags = self._mp_consts["MotionProgramRobotCapabilities"]
+        self._lock = threading.Lock()
 
     def execute_motion_program(self, program, record = False):
+        with self._lock:
+            c_tool = self.abb_robot_impl._current_tool[0]
+            c_payload = self.abb_robot_impl._current_payload[0]
+            c_payload_pose = self.abb_robot_impl._current_payload_pose[0]
+            abb_program, tool, payload, payload_pose = rr_motion_program_to_abb(program, 
+                self.abb_robot_impl._rox_robots[0], c_tool, c_payload, c_payload_pose)
 
-        abb_program = rr_motion_program_to_abb(program, self.abb_robot_impl._rox_robots[0])
+            if tool is not c_tool:
+                self.abb_robot_impl._current_tool[0] = None
+                self.abb_robot_impl.tool_attached(0, tool)
 
-        gen = ExecuteMotionProgramGen(self, self.rws, abb_program, record)
+            if payload is not c_payload:
+                self.abb_robot_impl._current_payload[0] = None
+                self.abb_robot_impl.payload_attached(0, payload, payload_pose)
 
-        return gen
+            gen = ExecuteMotionProgramGen(self, self.rws, abb_program, record)
+
+            return gen
 
     def preempt_motion_program(self, program, preempt_number, preempt_cmdnum):
-        abb_program = rr_motion_program_to_abb(program, self.abb_robot_impl._rox_robots[0])
+        with self._lock:
+            abb_program, tool, payload, _ = rr_motion_program_to_abb(program, self.abb_robot_impl._rox_robots[0], None, None, None)
 
-        async def _do_preempt():
-            await self.rws.preempt_motion_program(abb_program, preempt_number, preempt_cmdnum)
-        
-        fut = asyncio.run_coroutine_threadsafe(_do_preempt(), self.rws.loop)
-        fut.result()
+            assert tool is None and payload is None, "Tool and payload cannot be changed in preempt_motion_program"
+
+            async def _do_preempt():
+                await self.rws.preempt_motion_program(abb_program, preempt_number, preempt_cmdnum)
+            
+            fut = asyncio.run_coroutine_threadsafe(_do_preempt(), self.rws.loop)
+            fut.result()
 
 
     def run_timestep(self, now):

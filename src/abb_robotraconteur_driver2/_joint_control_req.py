@@ -6,7 +6,8 @@ import asyncio
 import concurrent.futures
 import queue
 class JointControlReq:
-    def __init__(self, rws: _rws.ABBRobotRWSImpl):
+    def __init__(self, abb_robot_impl, rws: _rws.ABBRobotRWSImpl):
+        self.abb_robot_impl = abb_robot_impl
         self.rws = rws
         self.error_obj = None
         self._lock = threading.Lock()
@@ -94,7 +95,12 @@ class JointControlReq:
                 await self._cv.wait_for(lambda: self._enabled or self._closed)
             try:
                 self.error_obj = None
-                mp_task, mp_status = self.rws.start_joint_control(start_timeout = 0.05, enable_motion_logging=False)
+                tool = self.abb_robot_impl._current_tool[0]
+                payload = self.abb_robot_impl._current_payload[0]
+                payload_pose = self.abb_robot_impl._current_payload_pose[0]
+                self._request_reload=False
+                mp_task, mp_status = self.rws.start_joint_control(start_timeout = 0.05, enable_motion_logging=False, 
+                    tool = tool, payload=payload, payload_pose=payload_pose)
                 with self._lock:
                     self._mp_task = mp_task
                     if self._closed:
@@ -111,7 +117,7 @@ class JointControlReq:
                             break
                 state_update_task = self.rws.loop.create_task(state_update())
                 async with self._cv:
-                    await self._cv.wait_for(lambda: not self._enabled or self._closed or
+                    await self._cv.wait_for(lambda: not self._enabled or self._closed or self._request_reload or
                     self._mp_state in (_rws.MotionProgramState.complete, _rws.MotionProgramState.error,
                             _rws.MotionProgramState.cancelled
                     ))
@@ -137,5 +143,13 @@ class JointControlReq:
             
             async with self._cv:
                 with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self._cv.wait_for(lambda: self._closed), timeout = 0.5)
+                    if not self._request_reload:
+                        await asyncio.wait_for(self._cv.wait_for(lambda: self._closed), timeout = 0.5)
 
+    def request_reload(self):
+        async def _do_req():
+            async with self._cv:
+                self._request_reload = True
+                self._cv.notify_all()
+
+        asyncio.run_coroutine_threadsafe(_do_req(), self.rws.loop)
