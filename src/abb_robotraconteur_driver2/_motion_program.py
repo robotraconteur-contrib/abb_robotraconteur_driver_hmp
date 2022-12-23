@@ -230,7 +230,8 @@ class RobotRecordingGen:
             # All current paths expect to be within 10 MB limit
             ret.time = self.robot_rec_np.data[:,0].flatten().astype(np.float64)
             ret.command_number = self.robot_rec_np.data[:,1].flatten().astype(np.int32)
-            ret.joints = self.robot_rec_np.data[:,2:].astype(np.float64)
+            # TODO: prismatic joints
+            ret.joints = np.deg2rad(self.robot_rec_np.data[:,2:].astype(np.float64))
             ret.column_headers = self.robot_rec_np.column_headers
 
             self.closed = True
