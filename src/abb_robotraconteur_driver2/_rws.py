@@ -134,7 +134,7 @@ class ABBRobotRWSImpl:
                     subscription_task = None
                 with suppress(Exception):
                     await self._robot_client.logout()
-            with self._state_cv:
+            async with self._state_cv:
                 self._state_cv.notify_all()
             
             await asyncio.sleep(0.5)
