@@ -8,7 +8,7 @@ long_description = (this_directory / "README.md").read_text()
 setuptools.setup(
     name='abb_robotraconteur_driver_hmp',
     version='0.1.0',
-    description='ABB Robot Raconteur Driver v2',
+    description='ABB Robot Raconteur Driver HMP',
     url='https://github.com/johnwason/abb_robotraconteur_driver_hmp',
     packages=setuptools.find_packages("src"),
     package_dir={"" :"src"},
