@@ -6,10 +6,10 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 
 setuptools.setup(
-    name='abb_robotraconteur_driver2',
+    name='abb_robotraconteur_driver_hmp',
     version='0.1.0',
     description='ABB Robot Raconteur Driver v2',
-    url='https://github.com/johnwason/abb_robotraconteur_driver2',
+    url='https://github.com/johnwason/abb_robotraconteur_driver_hmp',
     packages=setuptools.find_packages("src"),
     package_dir={"" :"src"},
     install_requires=[
