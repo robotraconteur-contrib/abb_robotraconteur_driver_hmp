@@ -312,7 +312,7 @@ class ABBRobotRWSImpl:
         try:
 
             self._mp_seqno_i += 1
-            seqno_started = await self._robot_client.get_analog_io("motion_program_seqno_started")
+            seqno_started = int(await self._robot_client.get_analog_io("motion_program_seqno_started"))
             if seqno_started >= self._mp_seqno_i:
                 self._mp_seqno_i = seqno_started + 1
             seqno = self._mp_seqno_i
@@ -458,7 +458,7 @@ class ABBRobotRWSImpl:
             enable_motion_logging = enable_motion_logging)
 
     async def preempt_motion_program(self, motion_program, preempt_number, preempt_cmdnum):
-        seqno = await self._robot_client.get_analog_io("motion_program_seqno")
+        seqno = int(await self._robot_client.get_analog_io("motion_program_seqno"))
         assert seqno > 0, "Motion program not running"
         b = motion_program.get_program_bytes(seqno)
         assert len(b) > 0, "Motion program must not be empty"
