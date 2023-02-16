@@ -137,7 +137,7 @@ class MoveCCommandConv:
 
 class WaitTimeCommandConv:
     rr_types = ["experimental.robotics.motion_program.WaitTimeCommand"]
-    freeform_names = ["WaitTime", "SetToolCommand", "experimental.robotics.motion_program.WaitTimeCommand"]
+    freeform_names = ["WaitTime", "WaitTimeCommand", "experimental.robotics.motion_program.WaitTimeCommand"]
 
     def apply_rr_command(self, cmd, mp, **kwargs):
         mp.WaitTime(cmd_get_arg(cmd, "time"))
@@ -333,6 +333,27 @@ class EGMMoveCCommandConv:
         rt2 = rr_robot_pose_to_abb(cmd_get_arg(cmd,"tcp_via_pose"),cfx_robot)
         mp.EGMMoveC(rt2, rt,  sd, zd)
 
+#ABB Setup Commands
+
+def rr_workobject_to_abb(rr_wobj_info):
+    robhold = rr_wobj_info.robhold
+    ufprog = rr_wobj_info.ufprog
+    ufmec = rr_wobj_info.ufmec
+    uframe = rr_pose_to_abb(rr_wobj_info.uframe)
+    oframe = rr_pose_to_abb(rr_wobj_info.oframe)
+    return abb_exec.wobjdata(robhold, ufprog, ufmec, uframe, oframe)
+
+class SetWorkObjectCommandConv:
+    rr_types = ["experimental.abb_robot.motion_program.SetWorkObjectCommand"]
+    freeform_names = ["SetWorkObject", "SetWorkObjectCommand", "experimental.abb_robot.motion_program.SetWorkObjectCommand"]
+
+    def apply_rr_command(self, cmd, mp, **kwargs):
+        assert False, "Unsupported in motion command section"
+
+    def add_setup_args(self, cmd, setup_args):
+        abb_wobj = rr_workobject_to_abb(cmd_get_arg(cmd,"workobject_info"))
+        setup_args["wobj"] = abb_wobj
+
 _command_convs = dict()
 _freeform_command_convs = dict()
 
@@ -354,7 +375,8 @@ conv_types = [
     EGMRunJointCommandConv,
     EGMRunPoseCommandConv,
     EGMMoveLCommandConv,
-    EGMMoveCCommandConv
+    EGMMoveCCommandConv,
+    SetWorkObjectCommandConv
 ]
 
 def _init_convs():
