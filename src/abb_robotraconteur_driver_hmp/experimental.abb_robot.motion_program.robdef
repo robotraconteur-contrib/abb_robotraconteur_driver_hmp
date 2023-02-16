@@ -134,3 +134,17 @@ struct EGMPathCorrection
     field uint32 age
 end
 
+struct WorkObjectInfo
+    field bool robhold
+    field bool ufprog
+    field string ufmec
+    field Pose uframe
+    field Pose oframe
+    field varvalue{string} extended
+end
+
+struct SetWorkObjectCommand
+    field WorkObjectInfo workobject_info
+    field varvalue{string} extended
+end
+
